@@ -1,5 +1,9 @@
 # Typsidian
 
+[![CI](https://github.com/illusionaries/typsidian/actions/workflows/ci.yml/badge.svg)](https://github.com/illusionaries/typsidian/actions/workflows/ci.yml)
+[![Release](https://github.com/illusionaries/typsidian/actions/workflows/release.yml/badge.svg)](https://github.com/illusionaries/typsidian/actions/workflows/release.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A standalone macOS app — and an Obsidian-like editor for **Typst**.
 
 ![Typsidian welcome screen with recent vaults](docs/screenshots/app-welcome.png)
@@ -22,6 +26,10 @@ fonts. A vault is just a folder of `.typ` files — open, edit and save them rig
 where they live, no import step, no database.
 
 ## Install & run
+
+Grab the latest `.dmg` from
+[Releases](https://github.com/illusionaries/typsidian/releases) (Apple Silicon,
+unsigned — right-click → Open the first time), or build it yourself:
 
 ```bash
 bun install
@@ -204,6 +212,21 @@ Visual-mode edits are tracked in an *edit session* that keeps the edited block's
 range in sync with the live source, so a fast keystroke never splices against a
 stale render.
 
+## Build & release
+
+Every push to `main` runs [CI](.github/workflows/ci.yml): typecheck, the native
+parser build, 114 engine/vault assertions, the web + server bundles, and the
+browser interaction suites (55 more checks) against a real headless Chrome.
+
+Tagging `v*` runs [Release](.github/workflows/release.yml): builds the native
+parser, bundles web + server, packages an unsigned arm64 `.dmg`/`.zip` with
+electron-builder, writes `SHA256SUMS.txt`, and publishes a GitHub release.
+
+```bash
+git tag -a v0.2.0 -m "Typsidian 0.2.0" && git push origin v0.2.0
+# or: gh workflow run release.yml -f tag=v0.2.0
+```
+
 ## Development
 
 ```bash
@@ -258,3 +281,9 @@ path for both environments.
   for exact spans.
 - No multiplayer, no sync, no search-replace across the vault yet (file search
   exists, `/api/search`).
+
+---
+
+Built with [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness).
+
+[![](https://img.shields.io/badge/powered_by-dsh-4D6BFE?style=flat-square&logo=deepseek&logoColor=white)](https://github.com/deepseek-ai/deepseek-harness)

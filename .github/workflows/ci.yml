@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The CI jobs never open the GUI; skip the Electron binary download.
+  ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+
+jobs:
+  build-and-test:
+    name: Build & test (macOS arm64)
+    runs-on: macos-14
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Cache Bun install
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: ${{ runner.os }}-bun-
+
+      - name: Cache Cargo (native Typst parser)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            native/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('native/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Build native parser
+        run: bun run build:native
+
+      - name: Engine tests
+        run: bun scripts/test-engine.mts
+
+      - name: Vault server tests
+        run: bun scripts/test-vaults.mts
+
+      - name: Build web and server bundles
+        run: |
+          bun run build:web
+          bun run build:server
+
+      - name: Browser interaction tests
+        env:
+          TYPSIDIAN_HOME: ${{ runner.temp }}/typsidian-home
+        run: |
+          mkdir -p "$TYPSIDIAN_HOME"
+          bun server/index.ts &
+          bun run dev:web -- --port 5173 --strictPort &
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:4747/api/health >/dev/null 2>&1 \
+              && curl -fsS http://localhost:5173/ >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          bun scripts/verify-ui.mjs
+          bun scripts/verify-errors.mjs
+          bun scripts/verify-vaults.mjs
+
+      - name: Upload failure screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failure-screenshots
+          path: /tmp/typsidian-shots
+          if-no-files-found: ignore
+          retention-days: 7

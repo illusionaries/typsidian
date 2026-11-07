@@ -89,12 +89,30 @@
       "darkModeSupport": true,
       "target": [
         {
-          "target": "dir",
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
           "arch": [
             "arm64"
           ]
         }
       ]
+    },
+    "artifactName": "Typsidian-${version}-${arch}.${ext}",
+    "dmg": {
+      "title": "Typsidian ${version}",
+      "artifactName": "Typsidian-${version}-${arch}.${ext}"
     }
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/illusionaries/typsidian.git"
+  },
+  "homepage": "https://github.com/illusionaries/typsidian#readme",
+  "author": "illusionaries",
+  "license": "MIT"
 }
