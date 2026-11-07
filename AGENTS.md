@@ -1,0 +1,5 @@
+- Commit and push often. Use conventional commit message.
+- Use concise commit title, detail changes in commit body.
+- Commit using your model ID and harness name.
+  - For example, if you are `deepseek-v4.1-flash` running in DeepSeek Harness (DSH), commit using email `deepseek-v4.1-flash@dsh.local`, author `DeepSeek V4.1 Flash`.
+- Unit test only when necessary. Do not over-test trivial points.
