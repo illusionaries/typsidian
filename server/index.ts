@@ -571,8 +571,14 @@ app.post('/api/export/pdf', async (request, response) => {
 const dist = path.resolve(fileURLToPath(new URL('../dist', import.meta.url)));
 if (fs.existsSync(dist)) {
   app.use(express.static(dist));
-  app.get('*', (request, response, next) => {
+  // Express 5 / path-to-regexp 8 removed bare "*" routes; a terminal middleware
+  // is the supported catch-all and keeps /api 404s intact.
+  app.use((request, response, next) => {
     if (request.path.startsWith('/api/')) {
+      next();
+      return;
+    }
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
       next();
       return;
     }

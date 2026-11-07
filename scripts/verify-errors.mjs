@@ -37,7 +37,7 @@ await api('/api/file', {
 
 const browser = await puppeteer.launch({
   executablePath: CHROME,
-  headless: 'new',
+  headless: true,
   args: ['--no-sandbox', '--disable-gpu', '--hide-scrollbars'],
   defaultViewport: { width: 1680, height: 1050, deviceScaleFactor: 2 },
 });

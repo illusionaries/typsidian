@@ -37,7 +37,7 @@ const newVault = path.join(os.tmpdir(), `typsidian-ui-vault-${Date.now()}`);
 
 const browser = await puppeteer.launch({
   executablePath: CHROME,
-  headless: 'new',
+  headless: true,
   args: ['--no-sandbox', '--disable-gpu', '--hide-scrollbars'],
   defaultViewport: { width: 1440, height: 940, deviceScaleFactor: 2 },
 });

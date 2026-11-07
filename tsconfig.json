@@ -16,10 +16,9 @@
     "forceConsistentCasingInFileNames": true,
     "noUnusedLocals": false,
     "types": ["node"],
-    "baseUrl": ".",
     "paths": {
-      "@shared/*": ["shared/*"],
-      "@web/*": ["web/src/*"]
+      "@shared/*": ["./shared/*"],
+      "@web/*": ["./web/src/*"]
     }
   },
   "include": ["shared", "server", "web/src", "vite.config.ts"]
