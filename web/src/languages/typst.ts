@@ -272,6 +272,29 @@ export function typstBlockActions(_source: string, block: DocBlock): BlockAction
 // Block text editing
 // ---------------------------------------------------------------------------
 
+/** Split a fenced raw block into its fence lines and body. */
+function splitFence(text: string): { open: string; body: string; close: string } | null {
+  const lines = text.split('\n');
+  if (lines.length < 2) return null;
+  const open = /^\s*(`{3,}|~{3,}).*$/.exec(lines[0]);
+  const close = /^\s*(`{3,}|~{3,})\s*$/.exec(lines[lines.length - 1]);
+  if (!open || !close) return null;
+  const fence = open[1][0];
+  if (close[1][0] !== fence) return null;
+  return {
+    open: lines[0],
+    body: lines.slice(1, -1).join('\n'),
+    close: lines[lines.length - 1],
+  };
+}
+
+/** Split a display equation block into its `$` delimiters and body. */
+function splitDisplayMath(text: string): { left: string; body: string; right: string } | null {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith('$ ') || !trimmed.endsWith(' $')) return null;
+  return { left: '$ ', body: trimmed.slice(2, -2), right: ' $' };
+}
+
 /** Text to show in the inline (visual mode) editor for a block. */
 export function typstEditableText(source: string, block: DocBlock): string {
   const text = blockText(source, block);
@@ -280,6 +303,14 @@ export function typstEditableText(source: string, block: DocBlock): string {
       return stripHeadingMarker(text);
     case 'paragraph':
       return text.trim();
+    case 'code': {
+      const fenced = splitFence(text);
+      return fenced ? fenced.body : text;
+    }
+    case 'math': {
+      const equation = splitDisplayMath(text);
+      return equation ? equation.body : text;
+    }
     default:
       return text;
   }
@@ -302,6 +333,16 @@ export function typstSpliceBlockEdit(
     case 'paragraph':
       next = newText.trim();
       break;
+    case 'code': {
+      const fenced = splitFence(oldText);
+      next = fenced ? `${fenced.open}\n${newText}\n${fenced.close}` : newText;
+      break;
+    }
+    case 'math': {
+      const equation = splitDisplayMath(oldText);
+      next = equation ? `${equation.left}${newText.trim()}${equation.right}` : newText;
+      break;
+    }
     default:
       next = newText;
       break;

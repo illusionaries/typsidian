@@ -2,9 +2,9 @@
 
 An Obsidian-like editor for **Typst**. Three ways to work with one document:
 
-![Split mode: source on the left, typeset pages on the right](docs/screenshots/split-dark.jpg)
+![Split mode: source on the left, typeset pages on the right](docs/screenshots/split-dark.png)
 
-![Visual mode: click a block and edit it in place](docs/screenshots/visual-edit.jpg)
+![Visual mode: click a block and edit it in place](docs/screenshots/visual-edit.png)
 
 | Mode | What it does | Shortcut |
 | --- | --- | --- |
@@ -44,6 +44,10 @@ are prebuilt for `darwin-arm64` by `@myriaddreamin/typst-ts-node-compiler`.
 - **Inline visual editing** — click a rendered block to get a floating editor
   with typst highlighting and block actions (heading levels, lists, code,
   equations, quotes, bold/italic/code). Edits re-typeset live; `Esc` closes.
+  Code blocks and display equations edit their *contents* — the fences and `$`
+  delimiters are preserved for you.
+
+![Editing a code block in place, fences hidden](docs/screenshots/code-block-edit.png)
 - **Real text selection** in the preview: the SVG carries invisible text runs, so
   you can select and copy prose from the typeset page.
 - **Diagnostics** — compile errors and warnings, underlined in the source and
@@ -176,7 +180,7 @@ npx tsx scripts/test-engine.mts  # engine invariants (blocks, layout neutrality)
 The verification scripts drive real Chrome via `puppeteer-core` and leave
 screenshots in `/tmp/typsidian-shots`.
 
-![Preview mode in the light theme](docs/screenshots/preview-light.jpg)
+![Preview mode in the light theme](docs/screenshots/preview-light.png)
 
 ## Known limitations
 
