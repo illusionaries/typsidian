@@ -71,6 +71,8 @@ export interface SavedFile {
 export interface ExportPdfRequest {
   path: string;
   source: string;
+  /** Unsaved sibling buffers, vault-relative path -> content. */
+  files?: Record<string, string>;
 }
 
 /** Health/ready probe used by the UI splash screen. */

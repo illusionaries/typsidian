@@ -181,17 +181,32 @@ await shot('06-preview');
 // ------------------------------------------------------- scroll sync ------
 await (await page.$$('.segmented__item'))[0].click();
 await sleep(900);
-const syncBefore = await page.evaluate(() => document.querySelector('.ts-preview__scroller')?.scrollTop ?? 0);
+// Use a short viewport so the second page is genuinely out of view.
+await page.setViewport({ width: 1680, height: 560, deviceScaleFactor: 2 });
+await sleep(900);
+await page.reload({ waitUntil: 'domcontentloaded' });
+await page.waitForSelector('.ts-page', { timeout: 45000 });
+await sleep(1500);
+const syncBefore = await page.evaluate(() => ({
+  previewTop: document.querySelector('.ts-preview__scroller')?.scrollTop ?? 0,
+  reveal: window.__typsidian.store.getSnapshot().revealBlockId,
+}));
 await page.evaluate(() => {
   const scroller = document.querySelector('.pane--editor .cm-scroller');
-  if (scroller) scroller.scrollTop = scroller.scrollHeight * 0.55;
+  if (scroller) scroller.scrollTop = scroller.scrollHeight;
 });
-await sleep(1400);
+await sleep(2200);
 const syncAfter = await page.evaluate(() => ({
   previewTop: document.querySelector('.ts-preview__scroller')?.scrollTop ?? 0,
-  activeBlock: document.querySelector('.ts-block-outline--active')?.getAttribute('data-block-id'),
+  reveal: window.__typsidian.store.getSnapshot().revealBlockId,
 }));
-check('scrolling the source scrolls the preview', syncAfter.previewTop > syncBefore + 20, `${syncBefore} -> ${syncAfter.previewTop}`);
+check(
+  'scrolling the source moves the preview',
+  syncAfter.previewTop > syncBefore.previewTop + 20 && syncAfter.reveal !== syncBefore.reveal,
+  `${syncBefore.previewTop} -> ${syncAfter.previewTop}, block ${syncBefore.reveal} -> ${syncAfter.reveal}`,
+);
+await page.setViewport({ width: 1680, height: 1050, deviceScaleFactor: 2 });
+await sleep(800);
 
 // ------------------------------------------------------- shortcuts -------
 await page.keyboard.down('Alt');
@@ -210,14 +225,15 @@ await page.keyboard.up('Alt');
 await sleep(700);
 
 // ------------------------------------------------- right-click actions ----
-const content = await page.$('.pane--editor .cm-content');
-const contentBox = await content.boundingBox();
-await page.mouse.click(contentBox.x + 5, contentBox.y + 5);
+const editorBox = await (await page.$('.pane--editor .cm-editor')).boundingBox();
+const clickX = editorBox.x + Math.min(240, editorBox.width * 0.4);
+const clickY = editorBox.y + editorBox.height * 0.35;
+await page.mouse.click(clickX, clickY);
 await sleep(300);
-await page.mouse.click(contentBox.x + 40, contentBox.y + 5, { button: 'right' });
-await sleep(600);
+await page.mouse.click(clickX, clickY, { button: 'right' });
+await sleep(900);
 const menu = await page.evaluate(() => {
-  const items = [...document.querySelectorAll('[role="menu"] button, [role="menuitem"], [class*="menu"] button')];
+  const items = [...document.querySelectorAll('[role="menuitem"]')];
   return { count: items.length, labels: items.map((el) => el.textContent?.trim()).slice(0, 6) };
 });
 check('right-click exposes block actions', menu.count > 0, JSON.stringify(menu.labels));

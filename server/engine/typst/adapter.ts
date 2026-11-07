@@ -3,7 +3,9 @@
  *
  * Pipeline
  * --------
- * 1. `splitTypstBlocks` splits markup into layout-safe blocks.
+ * 1. `splitBlocks` splits markup into layout-safe blocks. The native parser
+ *    (`native/`, uses the real Typst parser) is preferred; the heuristic in
+ *    `blocks.ts` is the fallback when the binary is not built.
  * 2. The source is *instrumented* with invisible, layout-neutral
  *    `#context[#metadata(... here().position() ...)]` marker lines in front of
  *    every block. Typst introspection then tells us exactly where each block
@@ -13,29 +15,40 @@
  *    one self-contained SVG per page.
  * 4. Marker positions are folded into page-local rectangles per block.
  *
- * The instrumentation is provably layout neutral: an invisible metadata line
- * contributes nothing to the frame, so both compiles produce identical
- * geometry (verified by comparing page dimensions and glyph transforms).
+ * Rendering never throws: any failure is returned as a diagnostic plus whatever
+ * partial result is available (blocks are always there). The expensive part is
+ * cached by content hash, so re-rendering an unchanged document is cheap, and
+ * repeated renders also skip the instrumentation compile.
  */
 
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { NodeCompiler } from '@myriaddreamin/typst-ts-node-compiler';
 
 import type {
   AdapterEnv,
+  BlockBox,
   DocBlock,
   DocumentAdapter,
   OutlineItem,
   RenderDiagnostic,
   RenderResult,
+  RenderedBlock,
   RenderedPage,
-  BlockBox,
 } from '../../../shared/doc';
-import { splitTypstBlocks } from './blocks';
-import { splitSvgIntoPages } from './svg';
+import { splitBlocks } from './native-parser';
+import { instrument, MARKER_KEY } from './markers';
+import { slicePageSvg, splitSvgIntoPages } from './svg';
+import { buildGeometry, type MarkerPosition } from './geometry';
+import {
+  cachedCliDiagnostics,
+  cliDiagnosticsAvailable,
+  collectCompileDiagnostics,
+  hashText,
+  mergeDiagnostics,
+  runCliDiagnostics,
+} from './adapter-diagnostics';
 
 const FONT_PATHS = [
   '/System/Library/Fonts',
@@ -50,83 +63,35 @@ const FONT_PATHS = [
   }
 });
 
-const MARKER_KEY = 'typsidian_block';
 const RENDER_CACHE_LIMIT = 48;
-
-interface MarkerPosition {
-  page: number;
-  x: number;
-  y: number;
-}
-
-interface Compiled {
-  pages: RenderedPage[];
-  markers: MarkerPosition[];
-  renderMs: number;
-  svgBytes: number;
-}
+/** A render this long after the previous one means the user paused typing. */
+const CLI_IDLE_MS = 700;
 
 export interface TypstAdapterOptions {
   /** Extra font directories. */
   fontPaths?: string[];
-  /** Use the local `typst` CLI for ranged diagnostics. */
+  /** Use the local `typst` CLI to fill in diagnostics without ranges. */
   cliDiagnostics?: boolean;
 }
 
-/**
- * Build the marker line inserted in front of a block.
- *
- * `here().position()` is resolved by Typst's introspection inside a context
- * block; metadata has no layout footprint, so the inserted line is invisible.
- */
-function markerLine(index: number): string {
-  return (
-    `#context[#metadata((` +
-    `${MARKER_KEY}: ${index}, ` +
-    `x: here().position().x, ` +
-    `y: here().position().y, ` +
-    `page: here().page() ` +
-    `))]`
-  );
+interface CoreRender {
+  key: string;
+  blocks: DocBlock[];
+  pages: RenderedPage[];
+  markers: MarkerPosition[];
+  boxes: BlockBox[];
+  /** Diagnostics known without a subprocess (messages and, usually, ranges). */
+  inMemory: RenderDiagnostic[];
+  svgBytes: number;
+  renderMs: number;
 }
 
-/**
- * Insert marker lines directly in front of every block.
- * Markers are always placed at a line start, which keeps the markup valid even
- * for blocks that begin in the middle of a line.
- */
-function instrument(source: string, blocks: DocBlock[]): string {
-  const offsets = blocks.map((block) => {
-    const lineStart = source.lastIndexOf('\n', block.range.from - 1) + 1;
-    return lineStart;
-  });
-  // De-duplicate offsets (two blocks can share a line start when one follows
-  // another without a newline) and keep them sorted.
-  const insertions = new Map<number, number[]>();
-  offsets.forEach((offset, blockIndex) => {
-    const list = insertions.get(offset);
-    if (list) list.push(blockIndex);
-    else insertions.set(offset, [blockIndex]);
-  });
-  const points = [...insertions.keys()].sort((a, b) => a - b);
-  if (points.length === 0) {
-    return `${markerLine(0)}\n${source}\n${markerLine(1)}\n`;
-  }
-  const parts: string[] = [];
-  let cursor = 0;
-  for (const point of points) {
-    parts.push(source.slice(cursor, point));
-    for (const blockIndex of insertions.get(point)!) parts.push(markerLine(blockIndex), '\n');
-    cursor = point;
-  }
-  parts.push(source.slice(cursor));
-  // End-of-document marker: lets the last block know where it stops.
-  parts.push('\n', markerLine(blocks.length), '\n');
-  return parts.join('');
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function toPt(value: unknown): number {
-  if (typeof value === 'number') return value;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
   if (typeof value === 'string') {
     const parsed = Number.parseFloat(value);
     return Number.isFinite(parsed) ? parsed : 0;
@@ -134,327 +99,40 @@ function toPt(value: unknown): number {
   return 0;
 }
 
+/**
+ * Turn metadata query results into one marker position per block boundary.
+ *
+ * Returns `[]` unless every boundary is present: partial geometry would place
+ * boxes on the wrong blocks, which is worse than no boxes at all (the UI falls
+ * back to "no hit testing" cleanly).
+ */
 function parseMarkers(raw: unknown, expected: number): MarkerPosition[] {
-  if (!Array.isArray(raw)) return [];
-  const markers: MarkerPosition[] = [];
+  if (!Array.isArray(raw) || expected <= 0) return [];
+  const positions: Array<MarkerPosition & { index: number }> = [];
   for (const value of raw) {
     if (!value || typeof value !== 'object') continue;
     const record = value as Record<string, unknown>;
-    if (typeof record[MARKER_KEY] !== 'number') continue;
-    const page = typeof record.page === 'number' ? record.page : 1;
-    markers.push({
-      page: Math.max(0, page - 1),
+    const index = record[MARKER_KEY];
+    if (typeof index !== 'number' || !Number.isInteger(index) || index < 0) continue;
+    const page = typeof record.page === 'number' ? Math.max(1, Math.round(record.page)) : 1;
+    positions.push({
+      index,
+      page: page - 1,
       x: toPt(record.x),
       y: toPt(record.y),
     });
   }
-  if (markers.length !== expected) {
-    // Partial results are still useful, but geometry needs a full set.
-    return markers.length >= expected ? markers.slice(0, expected) : [];
+  if (positions.length !== expected) return [];
+  positions.sort((a, b) => a.index - b.index);
+  const markers: MarkerPosition[] = [];
+  for (let index = 0; index < expected; index++) {
+    if (positions[index].index !== index) return [];
+    markers.push({ page: positions[index].page, x: positions[index].x, y: positions[index].y });
   }
   return markers;
 }
 
-/** Fold marker positions into page-local rectangles per block. */
-function buildGeometry(
-  blocks: DocBlock[],
-  markers: MarkerPosition[],
-  pages: RenderedPage[],
-): BlockBox[] {
-  if (markers.length !== blocks.length + 1 || pages.length === 0) return [];
-  // The very first marker sits before any page setup has been applied, so it
-  // can report (0, 0). Derive the content margin from the markers that do have
-  // a real position, then clamp everything into the content area.
-  const realXs = markers.map((marker) => marker.x).filter((x) => x > 1);
-  const margin = Math.max(0, (realXs.length > 0 ? Math.min(...realXs) : 0) - 2);
-  const contentLeft = margin;
-  for (const marker of markers) {
-    marker.x = Math.max(marker.x, margin);
-    marker.y = Math.max(marker.y, margin);
-  }
-  const boxes: BlockBox[] = [];
-  for (let index = 0; index < blocks.length; index++) {
-    const start = markers[index];
-    const end = markers[index + 1];
-    const rects: BlockBox['rects'] = [];
-    const startPage = Math.min(start.page, pages.length - 1);
-    const endPage = Math.min(Math.max(end.page, startPage), pages.length - 1);
-    const width = (page: number) => Math.max(40, pages[page].widthPt - contentLeft * 2);
-
-    if (startPage === endPage) {
-      const height = end.y - start.y;
-      rects.push({
-        page: startPage,
-        x: contentLeft,
-        y: Math.max(0, start.y - 2),
-        width: width(startPage),
-        height: Math.max(8, height),
-      });
-    } else {
-      const first = pages[startPage];
-      rects.push({
-        page: startPage,
-        x: contentLeft,
-        y: Math.max(0, start.y - 2),
-        width: width(startPage),
-        height: Math.max(8, first.heightPt - start.y - contentLeft),
-      });
-      for (let page = startPage + 1; page < endPage; page++) {
-        rects.push({
-          page,
-          x: contentLeft,
-          y: Math.max(0, contentLeft),
-          width: width(page),
-          height: Math.max(8, pages[page].heightPt - contentLeft * 2),
-        });
-      }
-      rects.push({
-        page: endPage,
-        x: contentLeft,
-        y: Math.max(0, contentLeft),
-        width: width(endPage),
-        height: Math.max(8, end.y - contentLeft),
-      });
-    }
-    boxes.push({ blockId: blocks[index].id, rects });
-  }
-  return boxes;
-}
-
-function lineColumnToOffset(source: string, line: number, column: number): number {
-  let current = 1;
-  let offset = 0;
-  while (offset < source.length && current < line) {
-    if (source.charCodeAt(offset) === 10) current++;
-    offset++;
-  }
-  return Math.min(source.length, offset + Math.max(0, column - 1));
-}
-
-interface CliDiagnostic {
-  severity: 'error' | 'warning';
-  message: string;
-  line: number;
-  column: number;
-}
-
-/** Run the local `typst` CLI to obtain diagnostics with exact positions. */
-function runCliDiagnostics(
-  root: string,
-  filePath: string,
-  source: string,
-): CliDiagnostic[] {
-  const dir = path.dirname(filePath);
-  const stamp = `${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
-  const tempSource = path.join(dir, `.typsidian-check-${stamp}.typ`);
-  const tempOut = path.join(os.tmpdir(), `typsidian-check-${stamp}.pdf`);
-  try {
-    fs.writeFileSync(tempSource, source);
-    const result = spawnSyncText(
-      'typst',
-      ['compile', '--diagnostic-format', 'short', '--root', root, tempSource, tempOut],
-      Math.max(4000, 1200 + source.length / 8),
-    );
-    if (result == null) return [];
-    const diagnostics: CliDiagnostic[] = [];
-    for (const line of result.split('\n')) {
-      const match = /^(.*?):(\d+):(\d+):\s*(error|warning):\s*(.*)$/.exec(line.trim());
-      if (!match) continue;
-      diagnostics.push({
-        severity: match[4] === 'error' ? 'error' : 'warning',
-        message: match[5].trim(),
-        line: Number(match[2]),
-        column: Number(match[3]),
-      });
-    }
-    return diagnostics;
-  } catch {
-    return [];
-  } finally {
-    safeUnlink(tempSource);
-    safeUnlink(tempOut);
-  }
-}
-
-function safeUnlink(file: string): void {
-  try {
-    fs.unlinkSync(file);
-  } catch {
-    /* ignore */
-  }
-}
-
-function spawnSyncText(command: string, args: string[], timeoutMs: number): string | null {
-  const result = spawnSync(command, args, { encoding: 'utf8', timeout: timeoutMs });
-  if (result.error) return null;
-  return `${result.stdout ?? ''}${result.stderr ?? ''}`;
-}
-
-/** Adapter implementation. */
-export class TypstAdapter implements DocumentAdapter {
-  readonly id = 'typst';
-  readonly displayName = 'Typst';
-  readonly extensions = ['.typ'] as const;
-  readonly capabilities = {
-    blockRendering: false,
-    paginated: true,
-    inlineTextEditing: true,
-    pdfExport: true,
-  };
-
-  private readonly compilers = new Map<string, NodeCompiler>();
-  private readonly cache = new Map<string, RenderResult>();
-  private revision = 0;
-  private readonly fontPaths: string[];
-  private readonly cliDiagnostics: boolean;
-
-  constructor(options: TypstAdapterOptions = {}) {
-    this.fontPaths = [...FONT_PATHS, ...(options.fontPaths ?? [])];
-    this.cliDiagnostics = options.cliDiagnostics ?? true;
-  }
-
-  async parse(source: string): Promise<DocBlock[]> {
-    return splitTypstBlocks(source);
-  }
-
-  async render(source: string, env: AdapterEnv): Promise<RenderResult> {
-    const blocks = splitTypstBlocks(source);
-    const cacheKey = `${env.filePath}\u0000${source}`;
-    const cached = this.cache.get(cacheKey);
-    if (cached) {
-      this.cache.delete(cacheKey);
-      this.cache.set(cacheKey, cached);
-      return { ...cached, blocks, stats: { ...cached.stats, revision: ++this.revision } };
-    }
-
-    const started = performance.now();
-    const compiler = this.compilerFor(env.vaultRoot);
-    const exists = fileExists(env.filePath);
-    const compileArgs = exists
-      ? { mainFilePath: env.filePath }
-      : { mainFileContent: source };
-
-    let pages: RenderedPage[] = [];
-    let markers: MarkerPosition[] = [];
-    let diagnostics: RenderDiagnostic[] = [];
-    let svgBytes = 0;
-
-    try {
-      if (exists) compiler.addSource(env.filePath, source);
-      const compiled = compiler.compile(compileArgs);
-      const failed = compiled.hasError() || !compiled.result;
-
-      if (failed) {
-        diagnostics = this.diagnosticsFor(compiler, compiled, source, env, true);
-      } else {
-        // 1. Rich SVG from the clean source.
-        const svg = compiler.svg(compileArgs);
-        svgBytes = svg.length;
-        pages = splitSvgIntoPages(svg);
-        // 2. Marker positions from the instrumented source.
-        if (exists) compiler.addSource(env.filePath, instrument(source, blocks));
-        const rawMarkers = compiler.query(
-          compileArgs,
-          { selector: 'metadata', field: 'value' },
-        );
-        markers = parseMarkers(rawMarkers, blocks.length + 1);
-        if (exists) compiler.addSource(env.filePath, source);
-      }
-    } catch (error) {
-      diagnostics = [
-        {
-          severity: 'error',
-          message: error instanceof Error ? error.message : String(error),
-          hints: [],
-        },
-      ];
-    }
-
-    const renderMs = performance.now() - started;
-    const result: RenderResult = {
-      language: this.id,
-      blocks,
-      pages,
-      boxes: buildGeometry(blocks, markers, pages),
-      diagnostics,
-      outline: outlineOf(blocks),
-      stats: { renderMs, svgBytes, revision: ++this.revision },
-    };
-
-    this.cache.set(cacheKey, result);
-    while (this.cache.size > RENDER_CACHE_LIMIT) {
-      const oldest = this.cache.keys().next();
-      if (oldest.done) break;
-      this.cache.delete(oldest.value);
-    }
-    return result;
-  }
-
-  async pdf(source: string, env: AdapterEnv): Promise<Uint8Array> {
-    const compiler = this.compilerFor(env.vaultRoot);
-    if (fileExists(env.filePath)) compiler.addSource(env.filePath, source);
-    const args = fileExists(env.filePath)
-      ? { mainFilePath: env.filePath }
-      : { mainFileContent: source };
-    return new Uint8Array(compiler.pdf(args));
-  }
-
-  private diagnosticsFor(
-    compiler: NodeCompiler,
-    compiled: ReturnType<NodeCompiler['compile']>,
-    source: string,
-    env: AdapterEnv,
-    withCli: boolean,
-  ): RenderDiagnostic[] {
-    const diagnostics: RenderDiagnostic[] = [];
-    try {
-      const taken = compiled.takeDiagnostics();
-      const short = taken?.shortDiagnostics ?? [];
-      for (const entry of short as Array<Record<string, unknown>>) {
-        const message = String(entry.message ?? 'compile error');
-        const severity = Number(entry.severity ?? 1) === 1 ? 'error' : 'warning';
-        diagnostics.push({ severity, message, hints: [] });
-      }
-    } catch {
-      /* ignore */
-    }
-    if (withCli && this.cliDiagnostics) {
-      const fromCli = runCliDiagnostics(env.vaultRoot, env.filePath, source);
-      if (fromCli.length > 0) {
-        return fromCli.map((entry) => {
-          const offset = lineColumnToOffset(source, entry.line, entry.column);
-          return {
-            severity: entry.severity,
-            message: entry.message,
-            range: { from: offset, to: Math.min(source.length, offset + 1) },
-            hints: [],
-          } satisfies RenderDiagnostic;
-        });
-      }
-    }
-    return diagnostics;
-  }
-
-  private compilerFor(vaultRoot: string): NodeCompiler {
-    const existing = this.compilers.get(vaultRoot);
-    if (existing) return existing;
-    const compiler = NodeCompiler.create({
-      workspace: vaultRoot,
-      fontArgs: [{ fontPaths: this.fontPaths }],
-    });
-    this.compilers.set(vaultRoot, compiler);
-    return compiler;
-  }
-}
-
-function fileExists(file: string): boolean {
-  try {
-    return fs.statSync(file).isFile();
-  } catch {
-    return false;
-  }
-}
-
+/** Outline items derived from heading blocks. */
 function outlineOf(blocks: DocBlock[]): OutlineItem[] {
   const outline: OutlineItem[] = [];
   for (const block of blocks) {
@@ -468,4 +146,306 @@ function outlineOf(blocks: DocBlock[]): OutlineItem[] {
     });
   }
   return outline;
+}
+
+/** Resolve a vault-relative POSIX path without allowing escapes. */
+function resolveInside(root: string, relative: string): string | null {
+  const base = path.resolve(root);
+  const absolute = path.resolve(base, relative.replace(/\\/g, '/'));
+  const check = path.relative(base, absolute);
+  if (check === '' || check.startsWith('..') || path.isAbsolute(check)) return null;
+  return absolute;
+}
+
+/** Adapter implementation. */
+export class TypstAdapter implements DocumentAdapter {
+  readonly id = 'typst';
+  readonly displayName = 'Typst';
+  readonly extensions = ['.typ'] as const;
+  readonly capabilities = {
+    blockRendering: true,
+    paginated: true,
+    inlineTextEditing: true,
+    pdfExport: true,
+  };
+
+  private readonly compilers = new Map<string, NodeCompiler>();
+  /** Shadow overlays currently mapped into each compiler instance. */
+  private readonly shadows = new Map<NodeCompiler, Set<string>>();
+  private readonly cache = new Map<string, CoreRender>();
+  private readonly lastRenderAt = new Map<string, number>();
+  private readonly cliTimers = new Map<string, NodeJS.Timeout>();
+  private revision = 0;
+  private readonly fontPaths: string[];
+  private readonly cliDiagnostics: boolean;
+
+  constructor(options: TypstAdapterOptions = {}) {
+    this.fontPaths = [...FONT_PATHS, ...(options.fontPaths ?? [])];
+    this.cliDiagnostics = options.cliDiagnostics ?? true;
+  }
+
+  async parse(source: string): Promise<DocBlock[]> {
+    return splitBlocks(source);
+  }
+
+  async render(source: string, env: AdapterEnv): Promise<RenderResult> {
+    const started = performance.now();
+    const key = this.cacheKey(source, env);
+    const previous = this.lastRenderAt.get(env.filePath) ?? 0;
+    const now = Date.now();
+    const idle = now - previous >= CLI_IDLE_MS;
+    this.lastRenderAt.set(env.filePath, now);
+
+    let core = this.cache.get(key);
+    if (core) {
+      this.cache.delete(key);
+      this.cache.set(key, core);
+    } else {
+      try {
+        core = this.buildCore(key, source, env, started);
+      } catch (error) {
+        core = this.fallbackCore(key, source, started, messageOf(error));
+      }
+      this.cache.set(key, core);
+      while (this.cache.size > RENDER_CACHE_LIMIT) {
+        const oldest = this.cache.keys().next();
+        if (oldest.done) break;
+        this.cache.delete(oldest.value);
+      }
+    }
+
+    let diagnostics = core.inMemory;
+    try {
+      diagnostics = await this.resolveDiagnostics(core, source, env, idle);
+    } catch {
+      /* diagnostics must never break a render */
+    }
+
+    return {
+      language: this.id,
+      blocks: core.blocks,
+      pages: core.pages,
+      boxes: core.boxes,
+      diagnostics,
+      outline: outlineOf(core.blocks),
+      stats: {
+        renderMs: Math.round((performance.now() - started) * 100) / 100,
+        svgBytes: core.svgBytes,
+        revision: ++this.revision,
+      },
+    };
+  }
+
+  /**
+   * Render one block in isolation.
+   *
+   * This rides on the full page render (which is cached by content hash), slices
+   * the block's rectangle out of its page SVG and returns it as a standalone
+   * `<svg>` (the per-page SVG already inlines its glyph defs, so it is
+   * self-contained). For a block that flows over several pages/columns the
+   * first rect is used.
+   */
+  async renderBlock(block: DocBlock, source: string, env: AdapterEnv): Promise<RenderedBlock> {
+    const result = await this.render(source, env);
+    const box = result.boxes.find((candidate) => candidate.blockId === block.id);
+    if (!box || box.rects.length === 0) {
+      return { blockId: block.id, rects: [], html: undefined };
+    }
+    const rect = box.rects[0];
+    const page = result.pages.find((candidate) => candidate.index === rect.page);
+    const html = page ? (slicePageSvg(page, rect) ?? undefined) : undefined;
+    return { blockId: block.id, rects: box.rects, html };
+  }
+
+  async pdf(source: string, env: AdapterEnv): Promise<Uint8Array> {
+    const compiler = this.compilerFor(env.vaultRoot);
+    this.applyOverlays(compiler, env, source);
+    return new Uint8Array(compiler.pdf({ mainFilePath: env.filePath }));
+  }
+
+  // ------------------------------------------------------------------ render --
+
+  private buildCore(key: string, source: string, env: AdapterEnv, started: number): CoreRender {
+    const blocks = splitBlocks(source);
+    const compiler = this.compilerFor(env.vaultRoot);
+    this.applyOverlays(compiler, env, source);
+
+    let pages: RenderedPage[] = [];
+    let markers: MarkerPosition[] = [];
+    let svgBytes = 0;
+    const diagnostics: RenderDiagnostic[] = [];
+
+    try {
+      const compiled = compiler.compile({ mainFilePath: env.filePath });
+      diagnostics.push(...collectCompileDiagnostics(compiler, compiled, source, env));
+
+      if (compiled.result) {
+        // 1. Rich SVG from the clean source.
+        const svg = compiler.svg({ mainFilePath: env.filePath });
+        svgBytes = svg.length;
+        pages = splitSvgIntoPages(svg);
+
+        // 2. Marker positions from the instrumented source. The clean source is
+        //    restored immediately so a crash cannot leak the instrumentation
+        //    into a later compile.
+        const instrumented = instrument(source, blocks);
+        if (instrumented !== source) {
+          compiler.mapShadow(env.filePath, Buffer.from(instrumented));
+          try {
+            const rawMarkers = compiler.query(
+              { mainFilePath: env.filePath },
+              { selector: 'metadata', field: 'value' },
+            );
+            markers = parseMarkers(rawMarkers, blocks.length + 1);
+          } finally {
+            compiler.mapShadow(env.filePath, Buffer.from(source));
+          }
+        }
+      } else if (diagnostics.length === 0) {
+        diagnostics.push({ severity: 'error', message: 'Typst compilation failed', hints: [] });
+      }
+    } catch (error) {
+      diagnostics.push({ severity: 'error', message: messageOf(error), hints: [] });
+    }
+
+    return {
+      key,
+      blocks,
+      pages,
+      markers,
+      boxes: buildGeometry(blocks, markers, pages),
+      inMemory: diagnostics,
+      svgBytes,
+      renderMs: Math.round((performance.now() - started) * 100) / 100,
+    };
+  }
+
+  /** Last-resort result if even the cache/build scaffolding fails. */
+  private fallbackCore(key: string, source: string, started: number, message: string): CoreRender {
+    let blocks: DocBlock[] = [];
+    try {
+      blocks = splitBlocks(source);
+    } catch {
+      /* ignore */
+    }
+    return {
+      key,
+      blocks,
+      pages: [],
+      markers: [],
+      boxes: [],
+      inMemory: [{ severity: 'error', message, hints: [] }],
+      svgBytes: 0,
+      renderMs: Math.round((performance.now() - started) * 100) / 100,
+    };
+  }
+
+  // -------------------------------------------------------------- diagnostics --
+
+  /**
+   * Diagnostics policy.
+   *
+   * In-memory diagnostics already carry ranges (and warnings), so the CLI is
+   * only consulted for diagnostics that are missing a range. Even then it is
+   * cached by content hash and gated: immediately after an error / after the
+   * user paused typing it runs inline so the UI gets ranges right away; while
+   * the user is typing it is debounced into a single background check whose
+   * result the next render picks up. If the binary is missing, the in-memory
+   * diagnostics are used as-is.
+   */
+  private async resolveDiagnostics(
+    core: CoreRender,
+    source: string,
+    env: AdapterEnv,
+    idle: boolean,
+  ): Promise<RenderDiagnostic[]> {
+    const base = core.inMemory;
+    if (!this.cliDiagnostics) return base;
+    if (!base.some((diagnostic) => !diagnostic.range)) return base;
+
+    const cached = cachedCliDiagnostics(core.key);
+    if (cached) return mergeDiagnostics(base, cached);
+    if (!cliDiagnosticsAvailable()) return base;
+
+    const hasError = base.some((diagnostic) => diagnostic.severity === 'error');
+    if (hasError || idle) {
+      const result = await runCliDiagnostics(core.key, source, env, { fontPaths: this.fontPaths });
+      return mergeDiagnostics(base, result.diagnostics);
+    }
+    this.scheduleCliCheck(core.key, source, env);
+    return base;
+  }
+
+  private scheduleCliCheck(key: string, source: string, env: AdapterEnv): void {
+    const existing = this.cliTimers.get(env.filePath);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      this.cliTimers.delete(env.filePath);
+      void runCliDiagnostics(key, source, env, { fontPaths: this.fontPaths }).catch(() => undefined);
+    }, CLI_IDLE_MS);
+    timer.unref?.();
+    this.cliTimers.set(env.filePath, timer);
+  }
+
+  // ---------------------------------------------------------------- overlays ---
+
+  /**
+   * Overlay the in-editor buffers onto the compiler's filesystem view.
+   *
+   * `mapShadow` keeps disk files untouched while letting the compiler see the
+   * unsaved main file *and* unsaved siblings, so `#import "sibling.typ"` works
+   * even before a save. Shadows from a previous render that are no longer
+   * provided are unmapped so stale buffers cannot leak into later documents.
+   */
+  private applyOverlays(compiler: NodeCompiler, env: AdapterEnv, source: string): void {
+    const next = new Set<string>();
+    const overlay = (absolute: string, content: string): void => {
+      try {
+        compiler.mapShadow(absolute, Buffer.from(content));
+        next.add(absolute);
+      } catch {
+        /* a path the compiler cannot virtualize just falls back to disk */
+      }
+    };
+    overlay(env.filePath, source);
+    for (const [relative, content] of Object.entries(env.files ?? {})) {
+      if (typeof content !== 'string') continue;
+      const absolute = resolveInside(env.vaultRoot, relative);
+      if (absolute) overlay(absolute, content);
+    }
+    const previous = this.shadows.get(compiler);
+    if (previous) {
+      for (const old of previous) {
+        if (next.has(old)) continue;
+        try {
+          compiler.unmapShadow(old);
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    this.shadows.set(compiler, next);
+  }
+
+  // ------------------------------------------------------------------- caches --
+
+  private cacheKey(source: string, env: AdapterEnv): string {
+    let filesSignature = '';
+    const files = env.files ?? {};
+    for (const key of Object.keys(files).sort()) {
+      filesSignature += `${key}\u0001${hashText(String(files[key]))}\u0002`;
+    }
+    return hashText(`${env.filePath}\u0000${env.vaultRoot}\u0000${source}\u0000${filesSignature}`);
+  }
+
+  private compilerFor(vaultRoot: string): NodeCompiler {
+    const existing = this.compilers.get(vaultRoot);
+    if (existing) return existing;
+    const compiler = NodeCompiler.create({
+      workspace: vaultRoot,
+      fontArgs: [{ fontPaths: this.fontPaths }],
+    });
+    this.compilers.set(vaultRoot, compiler);
+    return compiler;
+  }
 }

@@ -144,3 +144,40 @@ export function splitSvgIntoPages(svg: string): SvgPage[] {
   }
   return pages;
 }
+
+/**
+ * Cut a standalone SVG for one rectangle out of a rendered page.
+ *
+ * The per-page SVG already inlines the glyph defs, so the result is
+ * self-contained and can be injected into the DOM on its own. The `<svg>`
+ * wrapper is rewritten to a `viewBox` of the requested rect (plus padding,
+ * clamped to the page), which is what `renderBlock` uses for inline block
+ * previews and hover cards.
+ */
+export function slicePageSvg(
+  page: SvgPage,
+  rect: { x: number; y: number; width: number; height: number },
+  padding = 4,
+): string | null {
+  const markup = page.svg;
+  const openTag = /^<svg\b[^>]*>/.exec(markup);
+  if (!openTag) return null;
+  const pageWidth = page.widthPt;
+  const pageHeight = page.heightPt;
+  const left = Math.max(0, rect.x - padding);
+  const top = Math.max(0, rect.y - padding);
+  const right = Math.min(pageWidth, rect.x + rect.width + padding);
+  const bottom = Math.min(pageHeight, rect.y + rect.height + padding);
+  const width = Math.max(1, right - left);
+  const height = Math.max(1, bottom - top);
+  const number = (value: number): string => String(Math.round(value * 1000) / 1000);
+  let tag = openTag[0]
+    .replace(/\sviewBox="[^"]*"/, '')
+    .replace(/\s(?:width|height)="[^"]*"/g, '')
+    .replace(/>$/, '')
+    .replace(/\s*$/, '');
+  tag +=
+    ` viewBox="${number(left)} ${number(top)} ${number(width)} ${number(height)}"` +
+    ` width="${number(width)}" height="${number(height)}" preserveAspectRatio="xMinYMin meet">`;
+  return tag + markup.slice(openTag[0].length);
+}

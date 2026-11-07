@@ -593,7 +593,14 @@ class Store {
     const requestVersion = this.sourceVersion;
     this.set({ pending: true });
     try {
-      const result = await api.render({ path, source });
+      // Send every unsaved buffer so `#import "sibling.typ"` sees live edits.
+      const files: Record<string, string> = {};
+      for (const candidate of this.state.tabs) {
+        if (candidate.path !== path && candidate.source !== candidate.savedSource) {
+          files[candidate.path] = candidate.source;
+        }
+      }
+      const result = await api.render({ path, source, files });
       if (seq !== this.renderSeq) return;
       // A failed compile has no pages. Keep showing the last good typeset page
       // (with the new diagnostics on top) instead of flashing an empty pane.
@@ -676,7 +683,13 @@ class Store {
     const tab = this.activeTab;
     if (!tab) return;
     try {
-      const blob = await api.exportPdf({ path: tab.path, source: tab.source });
+      const files: Record<string, string> = {};
+      for (const candidate of this.state.tabs) {
+        if (candidate.path !== tab.path && candidate.source !== candidate.savedSource) {
+          files[candidate.path] = candidate.source;
+        }
+      }
+      const blob = await api.exportPdf({ path: tab.path, source: tab.source, files });
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement('a');
       anchor.href = url;

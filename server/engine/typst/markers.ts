@@ -45,7 +45,14 @@ export function markerLine(index: number): string {
 export function instrument(source: string, blocks: DocBlock[]): string {
   const insertions = new Map<number, number[]>();
   for (let index = 0; index < blocks.length; index++) {
-    const lineStart = source.lastIndexOf('\n', blocks[index].range.from - 1) + 1;
+    let lineStart = source.lastIndexOf('\n', blocks[index].range.from - 1) + 1;
+    // A Typst shebang is only a shebang on the very first line; putting a
+    // marker in front of it would turn the rest of the script into an error.
+    // Keep it first and instrument the block after it.
+    if (lineStart === 0 && source.startsWith('#!')) {
+      const lineEnd = source.indexOf('\n');
+      lineStart = lineEnd < 0 ? source.length : lineEnd + 1;
+    }
     const list = insertions.get(lineStart);
     if (list) list.push(index);
     else insertions.set(lineStart, [index]);

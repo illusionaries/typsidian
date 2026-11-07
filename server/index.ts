@@ -59,6 +59,19 @@ function sendFailure(
   response.status(status).json(failure(kind, message));
 }
 
+/** Only accept plain vault-relative paths with string content for overlays. */
+function sanitizeFiles(files: unknown): Record<string, string> {
+  const result: Record<string, string> = {};
+  if (!files || typeof files !== 'object') return result;
+  for (const [key, value] of Object.entries(files as Record<string, unknown>)) {
+    if (typeof value !== 'string') continue;
+    if (!key || key.startsWith('/') || key.includes('..') || key.includes('\\')) continue;
+    if (key.length > 512) continue;
+    result[key] = value;
+  }
+  return result;
+}
+
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -244,9 +257,10 @@ app.get('/api/events', (request, response) => {
 });
 
 app.post('/api/render', async (request, response) => {
-  const { path: relativePath, source } = (request.body ?? {}) as {
+  const { path: relativePath, source, files } = (request.body ?? {}) as {
     path?: string;
     source?: string;
+    files?: Record<string, string>;
   };
   if (!relativePath || typeof source !== 'string') {
     sendFailure(response, 400, 'bad-request', 'expected { path, source }');
@@ -267,7 +281,7 @@ app.post('/api/render', async (request, response) => {
     const result = await adapter.render(source, {
       filePath: vault.absolute(relativePath),
       vaultRoot: vault.root,
-      files: {},
+      files: sanitizeFiles(files),
     });
     const payload: RenderSuccess = { ok: true, ...result };
     response.json(payload);
@@ -277,9 +291,10 @@ app.post('/api/render', async (request, response) => {
 });
 
 app.post('/api/export/pdf', async (request, response) => {
-  const { path: relativePath, source } = (request.body ?? {}) as {
+  const { path: relativePath, source, files } = (request.body ?? {}) as {
     path?: string;
     source?: string;
+    files?: Record<string, string>;
   };
   const adapter = relativePath ? adapterForPath(relativePath) : null;
   if (!adapter || typeof source !== 'string') {
@@ -294,7 +309,7 @@ app.post('/api/export/pdf', async (request, response) => {
     const bytes = await adapter.pdf(source, {
       filePath: vault.absolute(relativePath!),
       vaultRoot: vault.root,
-      files: {},
+      files: sanitizeFiles(files),
     });
     const name = path.basename(relativePath!).replace(/\.[^.]+$/, '') || 'document';
     response.setHeader('Content-Type', 'application/pdf');

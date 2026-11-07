@@ -253,6 +253,11 @@ export function EditorPane(props: EditorPaneExtendedProps) {
     notifyCursor(view.state);
     scheduleVisible();
 
+    // Report the visible source range while scrolling so the preview follows.
+    const onScroll = () => scheduleVisible();
+    view.scrollDOM.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onScroll);
+
     // Right click on a block offers its language block actions.
     const onContextMenu = (event: MouseEvent) => {
       const current = propsRef.current;
@@ -277,6 +282,8 @@ export function EditorPane(props: EditorPaneExtendedProps) {
 
     return () => {
       host.removeEventListener('contextmenu', onContextMenu);
+      view.scrollDOM.removeEventListener('scroll', onScroll);
+      window.removeEventListener('resize', onScroll);
       if (visibleFrameRef.current != null) {
         window.cancelAnimationFrame(visibleFrameRef.current);
         visibleFrameRef.current = null;

@@ -57,7 +57,10 @@ let resolvedBinary: string | null | undefined;
 
 function binaryPath(): string | null {
   if (resolvedBinary !== undefined) return resolvedBinary;
-  if (process.env.TYPSIDIAN_DISABLE_NATIVE === '1') {
+  if (
+    process.env.TYPSIDIAN_DISABLE_NATIVE === '1' ||
+    process.env.TYPSIDIAN_FORCE_TS_SPLITTER === '1'
+  ) {
     resolvedBinary = null;
     return null;
   }

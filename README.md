@@ -2,6 +2,10 @@
 
 An Obsidian-like editor for **Typst**. Three ways to work with one document:
 
+![Split mode: source on the left, typeset pages on the right](docs/screenshots/split-dark.jpg)
+
+![Visual mode: click a block and edit it in place](docs/screenshots/visual-edit.jpg)
+
 | Mode | What it does | Shortcut |
 | --- | --- | --- |
 | **Split** | Markup on the left, typeset pages on the right. Click the preview to jump to source. | `⌥1` |
@@ -15,7 +19,8 @@ fonts. A vault is just a folder of `.typ` files.
 
 ```bash
 npm install
-npm run dev          # server (127.0.0.1:4747) + web (localhost:5173)
+npm run build:native   # optional but recommended: parser helper ("npm run dev" works without it)
+npm run dev            # server (127.0.0.1:4747) + web (localhost:5173)
 open http://localhost:5173
 ```
 
@@ -170,6 +175,8 @@ npx tsx scripts/test-engine.mts  # engine invariants (blocks, layout neutrality)
 
 The verification scripts drive real Chrome via `puppeteer-core` and leave
 screenshots in `/tmp/typsidian-shots`.
+
+![Preview mode in the light theme](docs/screenshots/preview-light.jpg)
 
 ## Known limitations
 
