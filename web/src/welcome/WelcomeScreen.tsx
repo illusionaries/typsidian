@@ -111,6 +111,9 @@ export function WelcomeScreen(props: WelcomeScreenProps) {
       const mod = event.metaKey || event.ctrlKey;
 
       if (mod && !event.altKey && event.key.toLowerCase() === 'o') {
+        // In the desktop app the native application menu owns ⌘O; only the
+        // browser build needs a renderer-side shortcut for the path prompt.
+        if (current.desktop) return;
         event.preventDefault();
         if (promptOpenRef.current || current.busy) return;
         openFolder();
@@ -268,7 +271,7 @@ export function WelcomeScreen(props: WelcomeScreenProps) {
               <span className="welcome__empty-hint">
                 {desktop
                   ? 'Choose a folder to get started — it will show up here next time.'
-                  : 'Open a folder by path to get started. Vaults you open will show up here.'}
+                  : 'Open a folder by path to get started. Recent vaults show up here.'}
               </span>
             </div>
           ) : (
@@ -292,7 +295,7 @@ export function WelcomeScreen(props: WelcomeScreenProps) {
                     </span>
                     <span className="welcome__row-body">
                       <span className="welcome__row-title">
-                        <span className="welcome__row-name">{vault.title}</span>
+                        <span className="welcome__row-name">{vaultTitle(vault)}</span>
                         {vault.exists ? null : <span className="welcome__row-badge">folder missing</span>}
                       </span>
                       <span className="welcome__row-path">{vault.root}</span>
@@ -305,7 +308,7 @@ export function WelcomeScreen(props: WelcomeScreenProps) {
                     type="button"
                     className="welcome__row-remove"
                     onClick={() => removeRecent(vault.root)}
-                    aria-label={`Remove ${vault.title} from recent vaults`}
+                    aria-label={`Remove ${vaultTitle(vault)} from recent vaults`}
                     title="Remove from recent vaults"
                   >
                     <IconClose size={12} />
@@ -399,6 +402,14 @@ export function relativeTime(timestamp: number, now = Date.now()): string {
   if (diff < 30 * day) return format(-Math.round(diff / (7 * day)), 'week');
   if (diff < 365 * day) return format(-Math.round(diff / (30 * day)), 'month');
   return format(-Math.round(diff / (365 * day)), 'year');
+}
+
+/** Display name for a recent vault, falling back to the folder name. */
+export function vaultTitle(vault: { title: string; root: string }): string {
+  const title = vault.title?.trim();
+  if (title) return title;
+  const parts = vault.root.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] ?? vault.root;
 }
 
 /** Full timestamp for tooltips, or an empty string when unknown. */

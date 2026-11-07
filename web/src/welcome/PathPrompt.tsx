@@ -32,7 +32,8 @@ export function isAbsolutePath(value: string): boolean {
 
 export function PathPrompt({ initialPath = '', busy, home, onSubmit, onClose }: PathPromptProps) {
   const [value, setValue] = useState(initialPath);
-  const [touched, setTouched] = useState(false);
+  /** Validate only once the user tried to submit or left the field. */
+  const [attempted, setAttempted] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const inputId = useId();
   const errorId = useId();
@@ -48,18 +49,14 @@ export function PathPrompt({ initialPath = '', busy, home, onSubmit, onClose }: 
   }, []);
 
   const trimmed = value.trim();
-  const absolute = trimmed === '' || isAbsolutePath(trimmed);
-  const invalid = touched && !absolute;
-  const canSubmit = trimmed.length > 0 && absolute && !busy;
+  const absolute = isAbsolutePath(trimmed);
+  const invalid = attempted && trimmed.length > 0 && !absolute;
+  const empty = attempted && trimmed.length === 0;
 
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
-    setTouched(true);
-    if (!trimmed) {
-      inputRef.current?.focus();
-      return;
-    }
-    if (!absolute) {
+    setAttempted(true);
+    if (!trimmed || !absolute) {
       inputRef.current?.focus();
       return;
     }
@@ -133,7 +130,9 @@ export function PathPrompt({ initialPath = '', busy, home, onSubmit, onClose }: 
           Folder path
         </label>
         <div
-          className={`welcome-modal__field${invalid ? ' welcome-modal__field--invalid' : ''}`}
+          className={`welcome-modal__field${
+            invalid || empty ? ' welcome-modal__field--invalid' : ''
+          }`}
         >
           <span className="welcome-modal__prompt" aria-hidden="true">
             <IconFolderOpen size={15} />
@@ -143,34 +142,40 @@ export function PathPrompt({ initialPath = '', busy, home, onSubmit, onClose }: 
             id={inputId}
             className="welcome-modal__input"
             value={value}
-            onChange={(event) => {
-              setValue(event.target.value);
-              setTouched(true);
+            onChange={(event) => setValue(event.target.value)}
+            onBlur={() => {
+              if (value.trim()) setAttempted(true);
             }}
             placeholder="e.g. /Users/you/Documents/notes"
             spellCheck={false}
             autoComplete="off"
             autoCorrect="off"
             autoCapitalize="off"
-            aria-invalid={invalid || undefined}
-            aria-describedby={invalid ? errorId : undefined}
+            aria-invalid={invalid || empty || undefined}
+            aria-describedby={invalid || empty ? errorId : undefined}
             disabled={busy}
           />
           <button
             type="submit"
             className="welcome-modal__submit"
-            disabled={!canSubmit}
-            title={canSubmit ? 'Open vault (↵)' : 'Enter an absolute path'}
+            disabled={busy || trimmed.length === 0}
+            title={trimmed.length === 0 ? 'Type a folder path first' : 'Open vault (↵)'}
           >
             Open
             <IconArrowRight size={14} />
           </button>
         </div>
 
-        {invalid ? (
+        {invalid || empty ? (
           <p className="welcome-modal__error" id={errorId} role="alert">
             <IconAlert size={13} />
-            That is not an absolute path. It should start with <code>/</code> or <code>~/</code>.
+            {empty ? (
+              <>Type the path of the folder you want to open.</>
+            ) : (
+              <>
+                Not an absolute path — it should start with <code>/</code> or <code>~/</code>.
+              </>
+            )}
           </p>
         ) : (
           <p className="welcome-modal__hint">

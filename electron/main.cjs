@@ -38,6 +38,45 @@ const HEALTH_TIMEOUT_MS = 20_000;
 const HEALTH_INTERVAL_MS = 150;
 const RECENT_LIMIT = 8;
 
+// ---------------------------------------------------------------------------
+// Boot log
+// ---------------------------------------------------------------------------
+//
+// A packaged app launched from Finder has no terminal, so the first thing the
+// shell does is append to ~/Library/Logs/Typsidian/main.log. That makes a launch
+// that dies before the window appears debuggable instead of silent.
+
+const BOOT_LOG = (() => {
+  const dir = path.join(require('node:os').homedir(), 'Library', 'Logs', APP_NAME);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    return path.join(dir, 'main.log');
+  } catch {
+    return null;
+  }
+})();
+
+function bootLog(message) {
+  const line = `[${new Date().toISOString()}] [${process.pid}] ${message}\n`;
+  if (!BOOT_LOG) return;
+  try {
+    fs.appendFileSync(BOOT_LOG, line);
+  } catch {
+    // never let logging break the app
+  }
+}
+
+process.on('uncaughtException', (error) => {
+  bootLog(`uncaught exception: ${error?.stack ?? error}`);
+  console.error(error);
+  if (!quitting) failFatal(error);
+});
+process.on('unhandledRejection', (reason) => {
+  bootLog(`unhandled rejection: ${reason instanceof Error ? reason.stack : String(reason)}`);
+});
+
+bootLog(`main.cjs loaded (electron ${process.versions.electron}, argv=${process.argv.slice(1).join(' ')})`);
+
 app.setName(APP_NAME);
 if (process.platform === 'darwin' && app.setAboutPanelOptions) {
   app.setAboutPanelOptions({
@@ -63,8 +102,10 @@ let menuRebuildTimer = null;
 let lastRecentVaults = [];
 
 if (!app.requestSingleInstanceLock()) {
+  bootLog('another instance already owns the lock: quitting');
   app.quit();
 } else {
+  bootLog('single instance lock acquired');
   boot();
 }
 
@@ -90,6 +131,7 @@ function boot() {
   });
 
   app.on('before-quit', () => {
+    bootLog('before-quit');
     quitting = true;
     stopServer();
   });
@@ -152,12 +194,15 @@ function userDataDir() {
 // ---------------------------------------------------------------------------
 
 async function onReady() {
+  bootLog('app ready: starting the local server');
   registerIpc();
   const port = await findFreePort();
   await startServer(port);
   serverPort = port;
+  bootLog(`server ready on ${HOST}:${port}`);
   await createWindow(port);
   await rebuildMenu();
+  bootLog('window shown');
 }
 
 /** Ask the kernel for an unused loopback port. */
@@ -280,6 +325,7 @@ function waitForHealth(port) {
 }
 
 function stopServer() {
+  if (serverProcess) bootLog('stopping the server');
   const child = serverProcess;
   serverProcess = null;
   if (!child) return;
@@ -304,6 +350,7 @@ function stopServer() {
 
 async function failFatal(error) {
   const message = error instanceof Error ? error.message : String(error);
+  bootLog(`fatal: ${message}`);
   console.error(`[typsidian] ${message}`);
   quitting = true;
   stopServer();
@@ -393,6 +440,10 @@ async function runMenuCommand(command, args = []) {
     );
     if (!applied) console.error(`[typsidian] renderer has no __typsidianMenu.${command} yet`);
     scheduleMenuRebuild();
+    // Vault commands record the new recent entry asynchronously (renderer →
+    // server); a second pass makes "Recent Vaults" current without waiting for
+    // the next window focus.
+    setTimeout(() => void rebuildMenu(), 900);
     return applied !== false;
   } catch (error) {
     console.error(`[typsidian] ${command} unavailable: ${error.message ?? error}`);

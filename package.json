@@ -19,7 +19,10 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test:engine": "bun scripts/test-engine.mts",
     "test:ui": "bun scripts/verify-ui.mjs && bun scripts/verify-errors.mjs",
-    "start": "NODE_ENV=production bun server/index.ts"
+    "start": "NODE_ENV=production bun server/index.ts",
+    "test:vaults": "bun scripts/test-vaults.mts",
+    "test:app": "bun scripts/verify-app.mjs",
+    "test": "bun scripts/test-engine.mts && bun scripts/test-vaults.mts"
   },
   "dependencies": {
     "@myriaddreamin/typst-ts-node-compiler": "^0.7.0",

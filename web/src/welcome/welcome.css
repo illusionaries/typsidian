@@ -429,11 +429,15 @@
   display: flex;
   flex-direction: column;
   gap: 3px;
-  max-height: 312px;
+  max-height: 300px;
   margin: 0;
-  padding: 2px;
+  padding: 2px 2px 16px;
   overflow-y: auto;
   list-style: none;
+  /* Fade the cut-off row so a long list reads as scrollable rather than broken.
+     The 16px bottom padding keeps the fade off the last row when it all fits. */
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent 100%);
 }
 
 .welcome__row-item {
@@ -515,6 +519,7 @@
 }
 
 .welcome__row-name {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -741,7 +746,7 @@
   display: grid;
   place-items: center;
   padding: 24px;
-  background: rgba(6, 6, 10, 0.55);
+  background: rgba(6, 6, 10, 0.62);
   animation: welcome-fade 140ms ease-out both;
 }
 
@@ -859,7 +864,8 @@
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
-.welcome-modal__field--invalid {
+.welcome-modal__field--invalid,
+.welcome-modal__field--invalid:focus-within {
   border-color: var(--danger);
   box-shadow: 0 0 0 3px var(--danger-soft);
 }
@@ -890,8 +896,8 @@
   color: var(--fg-subtle);
 }
 
-.welcome-modal__input:focus,
-.welcome-modal__input:focus-visible {
+.welcome .welcome-modal__input:focus,
+.welcome .welcome-modal__input:focus-visible {
   outline: none;
 }
 

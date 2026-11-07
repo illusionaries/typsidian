@@ -1,7 +1,11 @@
 # Typsidian
 
-A standalone macOS app — and an Obsidian-like editor for **Typst**. Three ways
-to work with one document:
+A standalone macOS app — and an Obsidian-like editor for **Typst**.
+
+![Typsidian welcome screen with recent vaults](docs/screenshots/app-welcome.png)
+
+Open a folder of notes, pick up where you left off from recent vaults, and work
+with one document in three ways:
 
 ![Split mode: source on the left, typeset pages on the right](docs/screenshots/split-dark.png)
 
@@ -14,7 +18,8 @@ to work with one document:
 | **Preview** | Read the typeset document. | `⌥3` |
 
 Everything is real Typst, compiled by Typst itself, using your machine's real
-fonts. A vault is just a folder of `.typ` files.
+fonts. A vault is just a folder of `.typ` files — open, edit and save them right
+where they live, no import step, no database.
 
 ## Install & run
 
@@ -30,6 +35,10 @@ Build a double-clickable app bundle:
 bun run desktop:package      # -> dist-app/mac-arm64/Typsidian.app
 bun run desktop:dmg          # -> dist-app/Typsidian-<version>.dmg
 ```
+
+The bundle is ad-hoc unsigned (no Developer ID in this environment), so it runs
+locally but is not notarized for distribution. `desktop:package` is a one-command
+rebuild: native parser → server bundle → web bundle → icon → `.app`.
 
 Browser development (fast HMR, same UI):
 
@@ -76,8 +85,12 @@ screen.
 - **Diagnostics** — compile errors and warnings, underlined in the source and
   listed in the Problems panel with line/column (sourced from the `typst` CLI for
   exact spans).
-- **Vault** — file tree with folders, create / rename / delete, autosave, a file
-  watcher that picks up external edits via SSE, and a quick filter.
+- **Standalone macOS app** — `dist-app/mac-arm64/Typsidian.app`: native window,
+  menu bar, folder pickers, drag-and-drop-free vault switching.
+- **Vaults** — welcome screen with recent vaults, open any folder, create a new
+  vault, import the bundled sample vault, switch or close vaults from the
+  sidebar menu. File tree with folders, create / rename / delete, autosave, a
+  file watcher that picks up external edits via SSE, and a quick filter.
 - **Export** — `⌘⇧E` downloads the compiled PDF.
 - **Themes** — dark and light, both driven by design tokens.
 - **Language-agnostic core** — see below. Typst is an adapter, not a dependency
@@ -88,6 +101,8 @@ screen.
 | Shortcut | Action |
 | --- | --- |
 | `⌥1` / `⌥2` / `⌥3` | Split / visual / preview mode |
+| `⌘O` | Open a vault |
+| `⌘N` | New note (in the desktop app) |
 | `⌘S` | Save (autosave also runs after 900 ms idle) |
 | `⌘⇧E` | Export PDF |
 | `⌘\` | Toggle sidebar |
@@ -165,6 +180,7 @@ source hash.
 
 ```
 electron/          desktop shell: window, native menu, folder dialogs, packaging
+build/             generated app icon (build/icon.png)
 shared/            universal document model + client/server protocol (no deps)
 server/            express API, vault IO, language registry
   engine/typst/    Typst DocumentAdapter (native compiler, SVG splitting, geometry)
@@ -202,6 +218,8 @@ bun scripts/test-engine.mts      # engine invariants (blocks, layout neutrality)
 bun scripts/test-vaults.mts      # vault open/create/close, recents, watcher swap
 bun scripts/verify-ui.mjs        # headless Chrome interaction suite
 bun scripts/verify-errors.mjs    # diagnostics, heading edits, paging
+bun scripts/verify-vaults.mjs    # welcome screen, recents, native-bridge simulation
+bun scripts/verify-app.mjs       # drives the packaged .app over CDP
 ```
 
 Runtime and package manager: **Bun**. Electron runs the UI with the same server
@@ -212,6 +230,23 @@ The verification scripts drive real Chrome via `puppeteer-core` and leave
 screenshots in `/tmp/typsidian-shots`.
 
 ![Preview mode in the light theme](docs/screenshots/preview-light.png)
+
+## Architecture (desktop)
+
+```
+Typsidian.app
+  └─ Electron main  ──spawns──▶  dist-server/index.cjs  (bun/Node, forked)
+       │                              │
+       │  IPC: folder pickers         │  express API + typst native compiler
+       ▼                              ▼
+     renderer  ───── HTTP ─────▶  http://127.0.0.1:<free port>  (serves dist/)
+```
+
+The renderer is ordinary web code: in the browser it degrades to a typed path
+for "open folder", in Electron the preload bridge (`window.typsidian`) offers
+native dialogs. Menu commands call into the app through a small renderer API
+(`window.__typsidianMenu`) instead of IPC data channels, so there is one code
+path for both environments.
 
 ## Known limitations
 
