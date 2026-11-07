@@ -5,12 +5,14 @@
   "type": "module",
   "description": "An Obsidian-like editor for Typst with a universal, language-agnostic document core.",
   "scripts": {
-    "dev": "concurrently -k -n server,web -c blue,green \"pnpm dev:server\" \"pnpm dev:web\"",
+    "dev": "concurrently -k -n server,web -c blue,green \"npm run dev:server\" \"npm run dev:web\"",
     "dev:server": "tsx watch server/index.ts",
     "dev:web": "vite",
     "build:web": "vite build",
     "build:native": "cargo build --release --manifest-path native/Cargo.toml",
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test:engine": "tsx scripts/test-engine.mts",
+    "test:ui": "node scripts/verify-ui.mjs && node scripts/verify-errors.mjs",
     "start": "NODE_ENV=production tsx server/index.ts"
   },
   "dependencies": {

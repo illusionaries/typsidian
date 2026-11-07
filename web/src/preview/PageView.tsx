@@ -31,6 +31,8 @@ export interface PageViewProps {
   hoverLabel: string | null;
   /** Tooltip for the hover chip. */
   hoverHint: string;
+  /** Rects of the block being edited; its rendered glyphs are masked out. */
+  maskRects: Rect[];
   /** Inline block editor, when this page owns the block being edited. */
   editingOverlay: ReactNode;
   /** Registers the DOM node so the surface can map points to page rects. */
@@ -50,8 +52,17 @@ function rectStyle(rect: Rect, page: RenderedPage): CSSProperties {
 }
 
 export function PageView(props: PageViewProps) {
-  const { page, pageNumber, widthPx, heightPx, activeRects, hoverRect, hoverLabel, editingOverlay } =
-    props;
+  const {
+    page,
+    pageNumber,
+    widthPx,
+    heightPx,
+    activeRects,
+    hoverRect,
+    hoverLabel,
+    maskRects,
+    editingOverlay,
+  } = props;
   const { registerPage } = props;
 
   const setRef = useCallback(
@@ -95,6 +106,18 @@ export function PageView(props: PageViewProps) {
           </div>
         ) : null}
       </div>
+
+      {maskRects.length > 0 ? (
+        <div className="ts-page__masks" aria-hidden="true">
+          {maskRects.map((rect, index) => (
+            <div
+              key={`mask-${index}`}
+              className="ts-page__mask"
+              style={rectStyle(rect, page)}
+            />
+          ))}
+        </div>
+      ) : null}
 
       {editingOverlay}
 

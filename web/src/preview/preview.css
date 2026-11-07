@@ -16,6 +16,13 @@
   background: var(--bg-inset);
   color: var(--fg);
   font-family: var(--font-ui);
+
+  /* How much the page is dimmed while the inline editor owns focus. */
+  --ts-editor-dim: 0.4;
+}
+
+:root[data-theme='light'] .ts-preview {
+  --ts-editor-dim: 0.22;
 }
 
 /* ------------------------------------------------------------------ scroll */
@@ -242,6 +249,43 @@
 
 .ts-preview__hint kbd {
   font-size: 9.5px;
+}
+
+/* ------------------------------------------------------- editing focus ---- */
+
+/* Dim + soften everything behind the inline editor. The card keeps z-index 40
+   (above this layer), the HUD and error banner stay crisp above it too. */
+.ts-preview__backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 18;
+  background: var(--bg);
+  opacity: var(--ts-editor-dim);
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+  pointer-events: none;
+  animation: ts-preview-dim-in 150ms ease-out;
+}
+
+@keyframes ts-preview-dim-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* The edited block's glyphs are replaced by bare paper while its inline
+   editor is open, so no typeset text competes with the live editor. */
+.ts-page__masks {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.ts-page__mask {
+  position: absolute;
+  border-radius: 3px;
+  background: var(--bg-paper);
+  box-shadow: inset 0 0 0 1px var(--accent-soft-2);
 }
 
 /* ------------------------------------------------------------ status layer */

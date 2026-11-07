@@ -376,7 +376,8 @@ export function PreviewSurface(props: PreviewSurfaceProps) {
 
   const hoveredBlock = hoveredBlockId ? blocksById.get(hoveredBlockId) ?? null : null;
   const hoveredRects = hoveredBlockId ? boxesById.get(hoveredBlockId) ?? NO_RECTS : NO_RECTS;
-  const hoveredIsHidden = hoveredBlockId !== null && hoveredBlockId === editingBlockId;
+  // While the inline editor is open it owns the page: no competing hover chrome.
+  const hoveredIsHidden = hoveredBlockId !== null && editingBlockId !== null;
 
   const editingBlock = editingBlockId ? blocksById.get(editingBlockId) ?? null : null;
   const editingRects = editingBlockId ? boxesById.get(editingBlockId) ?? NO_RECTS : NO_RECTS;
@@ -403,6 +404,9 @@ export function PreviewSurface(props: PreviewSurfaceProps) {
       />
     ) : null;
 
+  // The edited block's rendered glyphs are replaced by bare paper under the
+  // card; a mask is drawn only while the inline editor is open.
+  const editingMaskRects = editingBlockId ? editingRects : NO_RECTS;
   // The caret-driven highlight is meaningful in split / visual mode; a pure
   // read-only preview stays clean.
   const activeRects =
@@ -417,7 +421,6 @@ export function PreviewSurface(props: PreviewSurfaceProps) {
       className={`ts-preview ts-preview--${mode}${pending ? ' is-pending' : ''}`}
       role="region"
       aria-label="Rendered document"
-      data-reveal-id={revealBlockId ?? ''}
     >
       {pending ? <div className="ts-preview__progress" aria-hidden="true" /> : null}
 
@@ -428,6 +431,10 @@ export function PreviewSurface(props: PreviewSurfaceProps) {
           </span>
           <span className="ts-preview__error-text">{error}</span>
         </div>
+      ) : null}
+
+      {editingBlockId && editingPageIndex >= 0 ? (
+        <div className="ts-preview__backdrop" aria-hidden="true" />
       ) : null}
 
       <div
@@ -462,7 +469,12 @@ export function PreviewSurface(props: PreviewSurfaceProps) {
                       ? `✎ ${hoveredBlock.label || kindLabel(hoveredBlock)}`
                       : null
                   }
-                  hoverHint="Click to edit this block in place"
+                  hoverHint={
+                    mode === 'visual'
+                      ? 'Click to edit this block in place'
+                      : 'Click to jump to this block in the source'
+                  }
+                  maskRects={editingBlockId ? editingMaskRects.filter((rect) => rect.page === page.index) : NO_RECTS}
                   editingOverlay={index === editingPageIndex ? editingOverlay : null}
                   registerPage={registerPage}
                 />
@@ -486,7 +498,7 @@ export function PreviewSurface(props: PreviewSurfaceProps) {
         <div className="ts-preview__hint" aria-hidden="true">
           {editingBlockId ? (
             <>
-              Editing block · press <kbd>Esc</kbd> when done
+              Editing block · click another block or press <kbd>Esc</kbd>
             </>
           ) : (
             <>Click any block to edit it in place</>

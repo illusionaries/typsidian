@@ -76,7 +76,8 @@ function kindLabel(block: DocBlock): string {
 }
 
 const CARD_MIN_WIDTH = 420;
-const CARD_MAX_WIDTH = 720;
+/** Never narrower than this (unless the page itself is smaller). */
+const CARD_PREFERRED_MAX_WIDTH = 720;
 
 /** Editor chrome; colours are the shell's variables so themes just work. */
 const inlineEditorTheme = EditorView.theme({
@@ -154,7 +155,6 @@ export function InlineBlockEditor(props: InlineBlockEditorProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const mountedRef = useRef(false);
-  const lastEmittedRef = useRef<string | null>(null);
   const suppressEmitRef = useRef(false);
   const pendingActionRevisionRef = useRef<number | null>(null);
   const actionTimerRef = useRef<number | null>(null);
@@ -228,7 +228,6 @@ export function InlineBlockEditor(props: InlineBlockEditorProps) {
         EditorView.updateListener.of((update) => {
           if (!update.docChanged) return;
           const text = update.state.doc.toString();
-          lastEmittedRef.current = text;
           if (suppressEmitRef.current) {
             suppressEmitRef.current = false;
             return;
@@ -326,10 +325,7 @@ export function InlineBlockEditor(props: InlineBlockEditorProps) {
       return;
     }
     const current = view.state.doc.toString();
-    if (desired === current) {
-      lastEmittedRef.current = desired;
-      return;
-    }
+    if (desired === current) return;
     const selection = view.state.selection.main;
     suppressEmitRef.current = true;
     view.dispatch({
@@ -339,11 +335,14 @@ export function InlineBlockEditor(props: InlineBlockEditorProps) {
         head: Math.min(selection.head, desired.length),
       },
     });
-    lastEmittedRef.current = desired;
   }, [pending, renderRevision, source, block, language]);
 
   const pageWidthPx = page.widthPt * pxPerPt;
-  const cardWidth = clamp(rect.width * pxPerPt, CARD_MIN_WIDTH, CARD_MAX_WIDTH);
+  // Cover the block's whole text column so the live editor replaces the
+  // typeset block instead of sitting inside it. Old cards topped out at 720px,
+  // which left the rest of a wide block's text visible around the card.
+  const cardMaxWidth = Math.max(CARD_PREFERRED_MAX_WIDTH, Math.floor(pageWidthPx));
+  const cardWidth = clamp(rect.width * pxPerPt, CARD_MIN_WIDTH, cardMaxWidth);
   const left = Math.max(
     0,
     Math.min(rect.x * pxPerPt, Math.max(0, pageWidthPx - cardWidth - 10)),

@@ -595,16 +595,28 @@ class Store {
     try {
       const result = await api.render({ path, source });
       if (seq !== this.renderSeq) return;
-      const renders = { ...this.state.renders, [path]: result };
+      // A failed compile has no pages. Keep showing the last good typeset page
+      // (with the new diagnostics on top) instead of flashing an empty pane.
+      const previous = this.state.renders[path] ?? null;
+      const merged =
+        result.pages.length === 0 && previous && previous.pages.length > 0
+          ? {
+              ...result,
+              pages: previous.pages,
+              boxes: previous.boxes,
+              outline: result.outline.length > 0 ? result.outline : previous.outline,
+            }
+          : result;
+      const renders = { ...this.state.renders, [path]: merged };
       const patch: Partial<AppState> = {
-        renders,
+        renders: { ...this.state.renders, [path]: merged },
         renderError: null,
         pending: false,
       };
       // If no keystroke landed while this render was in flight, its block
       // ranges are authoritative: rebase the visual edit session onto them.
       if (this.editSession && requestVersion === this.sourceVersion) {
-        const fresh = result.blocks.find((block) => block.id === this.editSession?.blockId) ?? null;
+        const fresh = merged.blocks.find((block) => block.id === this.editSession?.blockId) ?? null;
         if (fresh) {
           this.editSession = {
             blockId: fresh.id,
@@ -614,7 +626,7 @@ class Store {
       }
       const cursor = this.activeTab?.cursor;
       if (cursor) {
-        const block = blockAtOffset(result.blocks, cursor.offset);
+        const block = blockAtOffset(merged.blocks, cursor.offset);
         patch.activeBlockId = block ? block.id : null;
       }
       this.set(patch);

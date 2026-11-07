@@ -27,6 +27,21 @@ async function api(path, init) {
   return response.json();
 }
 
+async function waitForServer(timeoutMs = 45000) {
+  const started = Date.now();
+  for (;;) {
+    try {
+      const response = await fetch(`${API}/api/health`);
+      if (response.ok) return;
+    } catch {
+      /* not up yet */
+    }
+    if (Date.now() - started > timeoutMs) throw new Error('server did not become healthy');
+    await sleep(500);
+  }
+}
+await waitForServer();
+
 const original = await api('/api/file?path=welcome.typ', { headers: {} });
 const originalSource = original.source;
 
@@ -162,6 +177,52 @@ const preview = await page.evaluate(() => ({
 }));
 check('preview mode hides the source editor', !preview.hasEditor, `pages visible`);
 await shot('06-preview');
+
+// ------------------------------------------------------- scroll sync ------
+await (await page.$$('.segmented__item'))[0].click();
+await sleep(900);
+const syncBefore = await page.evaluate(() => document.querySelector('.ts-preview__scroller')?.scrollTop ?? 0);
+await page.evaluate(() => {
+  const scroller = document.querySelector('.pane--editor .cm-scroller');
+  if (scroller) scroller.scrollTop = scroller.scrollHeight * 0.55;
+});
+await sleep(1400);
+const syncAfter = await page.evaluate(() => ({
+  previewTop: document.querySelector('.ts-preview__scroller')?.scrollTop ?? 0,
+  activeBlock: document.querySelector('.ts-block-outline--active')?.getAttribute('data-block-id'),
+}));
+check('scrolling the source scrolls the preview', syncAfter.previewTop > syncBefore + 20, `${syncBefore} -> ${syncAfter.previewTop}`);
+
+// ------------------------------------------------------- shortcuts -------
+await page.keyboard.down('Alt');
+await page.keyboard.press('2');
+await page.keyboard.up('Alt');
+await sleep(900);
+check('⌥2 switches to visual mode', await page.evaluate(() => document.querySelector('.ts-preview--visual') !== null));
+await page.keyboard.down('Alt');
+await page.keyboard.press('3');
+await page.keyboard.up('Alt');
+await sleep(700);
+check('⌥3 switches to preview mode', await page.evaluate(() => document.querySelector('.ts-preview--preview') !== null));
+await page.keyboard.down('Alt');
+await page.keyboard.press('1');
+await page.keyboard.up('Alt');
+await sleep(700);
+
+// ------------------------------------------------- right-click actions ----
+const content = await page.$('.pane--editor .cm-content');
+const contentBox = await content.boundingBox();
+await page.mouse.click(contentBox.x + 5, contentBox.y + 5);
+await sleep(300);
+await page.mouse.click(contentBox.x + 40, contentBox.y + 5, { button: 'right' });
+await sleep(600);
+const menu = await page.evaluate(() => {
+  const items = [...document.querySelectorAll('[role="menu"] button, [role="menuitem"], [class*="menu"] button')];
+  return { count: items.length, labels: items.map((el) => el.textContent?.trim()).slice(0, 6) };
+});
+check('right-click exposes block actions', menu.count > 0, JSON.stringify(menu.labels));
+await page.keyboard.press('Escape');
+await sleep(300);
 
 // -------------------------------------------------------------- theme -----
 await page.click('.toolbar__group .icon-button:last-child');
