@@ -1,0 +1,579 @@
+/* ==========================================================================
+   Sidebar — file tree + outline.
+
+   Every colour, radius and shadow comes from the tokens defined by the shell
+   in styles.css. Class names are prefixed (`tp-`) so nothing here can collide
+   with shell styles.
+   ========================================================================== */
+
+.tp-sidebar {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg-elevated);
+  color: var(--fg);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  user-select: none;
+}
+
+/* ------------------------------------------------------------------ head -- */
+
+.tp-sidebar__header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 34px;
+  padding: 6px 8px 4px 10px;
+  flex: 0 0 auto;
+}
+
+.tp-sidebar__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-subtle);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tp-sidebar__count {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border-radius: 99px;
+  background: var(--bg-elevated-2);
+  border: 1px solid var(--border);
+  color: var(--fg-subtle);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  line-height: 15px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.tp-sidebar__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.tp-sidebar__spacer {
+  flex: 1;
+}
+
+/* ---------------------------------------------------------------- inputs -- */
+
+.tp-sidebar__search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin: 0 8px 6px;
+  flex: 0 0 auto;
+}
+
+.tp-sidebar__search-icon {
+  position: absolute;
+  left: 7px;
+  width: 12px;
+  height: 12px;
+  color: var(--fg-subtle);
+  pointer-events: none;
+}
+
+.tp-sidebar__search input {
+  width: 100%;
+  height: 26px;
+  padding: 0 22px 0 24px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-inset);
+  color: var(--fg);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  outline: none;
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+
+.tp-sidebar__search input::placeholder {
+  color: var(--fg-subtle);
+}
+
+.tp-sidebar__search input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft-2);
+}
+
+.tp-sidebar__clear {
+  position: absolute;
+  right: 3px;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  color: var(--fg-subtle);
+}
+
+.tp-sidebar__clear:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.tp-sidebar__clear svg {
+  width: 11px;
+  height: 11px;
+}
+
+/* --------------------------------------------------------------- buttons -- */
+
+.tp-icon-btn {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  color: var(--fg-subtle);
+  transition: background var(--transition), color var(--transition);
+  flex: 0 0 auto;
+}
+
+.tp-icon-btn:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.tp-icon-btn:active {
+  background: var(--hover-strong);
+}
+
+.tp-icon-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.tp-icon-btn:focus-visible,
+.tp-btn:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.tp-icon-btn svg {
+  width: 13px;
+  height: 13px;
+}
+
+.tp-icon-btn--danger:hover {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.tp-icon-btn--small {
+  width: 20px;
+  height: 20px;
+}
+
+.tp-icon-btn--small svg {
+  width: 12px;
+  height: 12px;
+}
+
+.tp-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated-2);
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background var(--transition), color var(--transition), border-color var(--transition);
+}
+
+.tp-btn:hover {
+  background: var(--hover-strong);
+  color: var(--fg);
+}
+
+.tp-btn--danger {
+  border-color: transparent;
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.tp-btn--danger:hover {
+  background: var(--danger);
+  color: var(--bg-elevated);
+}
+
+.tp-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ----------------------------------------------------------- error/empty -- */
+
+.tp-sidebar__error {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0 8px 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 11.5px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  flex: 0 0 auto;
+}
+
+.tp-sidebar__error svg {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.tp-sidebar__error-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.tp-sidebar__empty {
+  padding: 26px 18px;
+  color: var(--fg-subtle);
+  font-size: 12px;
+  line-height: 1.55;
+  text-align: center;
+}
+
+.tp-sidebar__empty strong {
+  color: var(--fg-muted);
+  font-weight: 600;
+}
+
+/* ----------------------------------------------------------------- tree --- */
+
+.tp-tree {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 2px 6px 14px;
+  outline: none;
+}
+
+.tp-tree__row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding-right: 5px;
+  border-radius: 6px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  position: relative;
+  transition: background var(--transition), color var(--transition);
+}
+
+.tp-tree__row:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.tp-tree__row:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.tp-tree__row--dir {
+  color: var(--fg);
+  font-weight: 500;
+}
+
+.tp-tree__row--file.is-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.tp-tree__row--file.is-active .tp-tree__icon {
+  color: var(--accent);
+}
+
+.tp-tree__chevron {
+  width: 11px;
+  height: 11px;
+  flex: 0 0 auto;
+  color: var(--fg-subtle);
+  transition: transform 120ms ease;
+}
+
+.tp-chevron.is-open {
+  transform: rotate(90deg);
+}
+
+.tp-tree__icon {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  color: var(--fg-subtle);
+}
+
+.tp-tree__row--dir .tp-tree__icon {
+  color: var(--accent);
+  opacity: 0.85;
+}
+
+.tp-tree__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tp-tree__path {
+  color: var(--fg-subtle);
+  margin-right: 2px;
+}
+
+.tp-tree__count {
+  flex: 0 0 auto;
+  color: var(--fg-subtle);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  opacity: 0.8;
+}
+
+.tp-tree__badge {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  color: var(--fg-subtle);
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  line-height: 13px;
+  letter-spacing: 0.04em;
+  opacity: 0.9;
+}
+
+.tp-tree__row--file.is-active .tp-tree__badge {
+  border-color: transparent;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.tp-tree__dirty {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--warning);
+  box-shadow: 0 0 0 2px var(--warning-soft);
+}
+
+.tp-tree__actions {
+  display: none;
+  align-items: center;
+  gap: 1px;
+  flex: 0 0 auto;
+}
+
+.tp-tree__row:hover .tp-tree__actions,
+.tp-tree__row:focus-within .tp-tree__actions,
+.tp-tree__row:focus .tp-tree__actions {
+  display: flex;
+}
+
+/* Inline create / rename editors */
+
+.tp-tree__create {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 6px 5px;
+}
+
+.tp-tree__create-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.tp-tree__create-prefix {
+  flex: 0 0 auto;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-subtle);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.tp-tree__input {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: 5px;
+  border: 1px solid var(--accent);
+  background: var(--bg-inset);
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent-soft-2);
+}
+
+.tp-tree__input::placeholder {
+  color: var(--fg-subtle);
+}
+
+.tp-tree__inline-error {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  color: var(--danger);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.tp-tree__spinner {
+  width: 11px;
+  height: 11px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  border: 1.5px solid var(--accent-soft);
+  border-top-color: var(--accent);
+  animation: tp-spin 700ms linear infinite;
+}
+
+@keyframes tp-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Delete confirmation row */
+
+.tp-tree__row--confirm {
+  gap: 6px;
+  color: var(--fg);
+  background: var(--danger-soft);
+  cursor: default;
+}
+
+.tp-tree__row--confirm:hover {
+  background: var(--danger-soft);
+}
+
+.tp-tree__confirm-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--fg);
+}
+
+.tp-tree__row--confirm .tp-btn {
+  height: 20px;
+}
+
+/* -------------------------------------------------------------- outline --- */
+
+.tp-outline {
+  height: 100%;
+}
+
+.tp-outline__list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 6px 14px;
+}
+
+.tp-outline__item {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 8px;
+  border-radius: 6px;
+  color: var(--fg-muted);
+  text-align: left;
+  font-size: 12.5px;
+  line-height: 1.35;
+  transition: background var(--transition), color var(--transition);
+}
+
+.tp-outline__item:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.tp-outline__item:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.tp-outline__item.is-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.tp-outline__dot {
+  flex: 0 0 auto;
+  width: 5px;
+  height: 5px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.45;
+}
+
+.tp-outline__item.is-active .tp-outline__dot {
+  opacity: 1;
+}
+
+.tp-outline__text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tp-outline__item[data-depth='0'] .tp-outline__text {
+  font-weight: 600;
+}
+
+.tp-outline__hint {
+  flex: 0 0 auto;
+  padding: 6px 12px 8px;
+  border-top: 1px solid var(--border);
+  color: var(--fg-subtle);
+  font-size: 10.5px;
+  line-height: 1.4;
+}

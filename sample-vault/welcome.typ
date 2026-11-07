@@ -21,7 +21,7 @@
 = Welcome to Typsidian
 
 Typsidian is an Obsidian-like editor for *Typst*. It has three ways of working,
-and you can switch between them with `⌘1`, `⌘2` and `⌘3`:
+and you can switch between them with `⌥1`, `⌥2` and `⌥3`:
 
 - *Split* — the markup on the left, the typeset page on the right.
 - *Visual* — the page fills the screen; click any block to edit it in place.
@@ -37,7 +37,7 @@ you are editing the very source that produced it, while the rest of the page
 stays typeset. Press `Esc` when you are done.
 
 In *split* mode, click anywhere in the preview to jump the text cursor to the
-corresponding source block. Scroll either pane and the other follows.
+corresponding source block; scrolling the source keeps the preview in sync.
 
 == Typst, briefly
 
@@ -53,11 +53,12 @@ Lists, tables, figures and code are all first class:
   stroke: 0.5pt + rgb("#d4d4d8"),
   align: (left, left, right),
   table.header[*Feature*][*What it does*][*Shortcut*],
-  [Split mode], [Source and preview side by side], [`⌘1`],
-  [Visual mode], [Click a block to edit it], [`⌘2`],
-  [Preview], [Read the typeset document], [`⌘3`],
+  [Split mode], [Source and preview side by side], [`⌥1`],
+  [Visual mode], [Click a block to edit it], [`⌥2`],
+  [Preview], [Read the typeset document], [`⌥3`],
   [Save], [Write the file to the vault], [`⌘S`],
-  [Export PDF], [Download the compiled PDF], [`⌘P`],
+  [Export PDF], [Download the compiled PDF], [`⌘⇧E`],
+  [Sidebar], [Show or hide the file tree], [`⌘\\`],
 )
 
 ```
@@ -83,4 +84,4 @@ drive Markdown, or any other markup language, later.
 - Edit this text. It is a normal `.typ` file in `sample-vault/welcome.typ`.
 - Open `showcase.typ` for more Typst features.
 - Create a new note with the `+` button in the sidebar.
-- Press `⌘P` to export the PDF.
+- Press `⌘⇧E` to export the PDF, or `⌘S` to save.

@@ -83,6 +83,26 @@ function languageForPath(path: string | null, workspace: WorkspaceInfo | null): 
   return 'plain';
 }
 
+const UI_STORAGE_KEY = 'typsidian.ui';
+
+interface PersistedUi {
+  theme?: 'dark' | 'light';
+  zoom?: number;
+  sidebarOpen?: boolean;
+  mode?: ViewMode;
+}
+
+function loadPersistedUi(): PersistedUi {
+  try {
+    const raw = localStorage.getItem(UI_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as PersistedUi;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 class Store {
   private state: AppState = {
     ready: false,
@@ -107,14 +127,51 @@ class Store {
     toasts: [],
   };
 
+  constructor() {
+    const persisted = loadPersistedUi();
+    this.state = {
+      ...this.state,
+      theme: persisted.theme === 'light' ? 'light' : 'dark',
+      zoom: typeof persisted.zoom === 'number' ? persisted.zoom : 1,
+      sidebarOpen: persisted.sidebarOpen !== false,
+      mode: persisted.mode === 'visual' || persisted.mode === 'preview' ? persisted.mode : 'split',
+    };
+  }
+
+  private persistUi(): void {
+    try {
+      localStorage.setItem(
+        UI_STORAGE_KEY,
+        JSON.stringify({
+          theme: this.state.theme,
+          zoom: this.state.zoom,
+          sidebarOpen: this.state.sidebarOpen,
+          mode: this.state.mode,
+        }),
+      );
+    } catch {
+      /* storage may be unavailable */
+    }
+  }
+
   private listeners = new Set<Listener>();
   private renderTimer: ReturnType<typeof setTimeout> | null = null;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private renderSeq = 0;
   private toastSeq = 0;
-  private editingOrdinal: number | null = null;
+  /**
+   * Visual-mode edit session. While a block is open in the inline editor we
+   * track ITS range in the *current* source, because the last server render
+   * describes an older source revision. Splicing against stale block ranges
+   * duplicates text.
+   */
+  private editSession: { blockId: string; block: DocBlock } | null = null;
+  /** Incremented for every source mutation; used to reject stale renders. */
+  private sourceVersion = 0;
   private revealSeq = 0;
   private dragging = false;
+  private initPromise: Promise<void> | null = null;
+  private opening = new Set<string>();
 
   // ------------------------------------------------------------- plumbing --
 
@@ -128,6 +185,7 @@ class Store {
   private set(patch: Partial<AppState> | ((state: AppState) => Partial<AppState>)): void {
     const next = typeof patch === 'function' ? patch(this.state) : patch;
     this.state = { ...this.state, ...next };
+    this.persistUi();
     for (const listener of this.listeners) listener();
   }
 
@@ -146,7 +204,13 @@ class Store {
 
   // --------------------------------------------------------------- boot ----
 
-  async init(): Promise<void> {
+  /** Boot once, even under React StrictMode's double effects. */
+  init(): Promise<void> {
+    if (!this.initPromise) this.initPromise = this.doInit();
+    return this.initPromise;
+  }
+
+  private async doInit(): Promise<void> {
     try {
       const workspace = await api.workspace();
       const preferred =
@@ -178,6 +242,44 @@ class Store {
     }
   }
 
+  /** React to file-system changes coming from the vault watcher. */
+  async handleVaultEvents(events: Array<{ type: 'change' | 'add' | 'unlink'; path: string }>): Promise<void> {
+    if (events.length === 0) return;
+    let needsRefresh = false;
+    for (const event of events) {
+      const tab = this.state.tabs.find((candidate) => candidate.path === event.path);
+      const active = this.state.activePath === event.path;
+      if (event.type === 'unlink') {
+        if (!tab) {
+          needsRefresh = true;
+          continue;
+        }
+        if (tab.source === tab.savedSource) this.closeTab(event.path);
+        needsRefresh = true;
+        continue;
+      }
+      if (event.type === 'change' && tab && tab.source === tab.savedSource) {
+        try {
+          const file = await api.readFile(event.path);
+          if (file.source !== tab.source) {
+            this.set((state) => ({
+              tabs: state.tabs.map((candidate) =>
+                candidate.path === event.path
+                  ? { ...candidate, source: file.source, savedSource: file.source }
+                  : candidate,
+              ),
+            }));
+            if (active) this.scheduleRender(0);
+          }
+        } catch {
+          /* file vanished mid-read; the next event will settle it */
+        }
+      }
+      needsRefresh = true;
+    }
+    if (needsRefresh) void this.refreshWorkspace();
+  }
+
   fileEntry(path: string | null): FileEntry | null {
     if (!path) return null;
     return this.state.workspace?.files.find((file) => file.path === path) ?? null;
@@ -186,13 +288,15 @@ class Store {
   // -------------------------------------------------------------- files ----
 
   async openFile(path: string): Promise<void> {
+    if (this.opening.has(path)) return;
     const existing = this.state.tabs.find((tab) => tab.path === path);
     if (existing) {
-      this.set({ activePath: path, editingBlockId: null, editingOrdinal: null, revealBlockId: null });
-      this.editingOrdinal = null;
+      this.set({ activePath: path, editingBlockId: null, revealBlockId: null });
+      this.endEditSession();
       if (!this.state.renders[path]) this.scheduleRender(0);
       return;
     }
+    this.opening.add(path);
     try {
       const file = await api.readFile(path);
       const tab: OpenTab = {
@@ -207,10 +311,13 @@ class Store {
         editingBlockId: null,
         revealBlockId: null,
       }));
-      this.editingOrdinal = null;
+      document.title = `${file.path.split('/').pop()} — Typsidian`;
+      this.endEditSession();
       await this.renderNow();
     } catch (error) {
       this.toast(`Could not open ${path}: ${messageOf(error)}`, 'error');
+    } finally {
+      this.opening.delete(path);
     }
   }
 
@@ -227,7 +334,7 @@ class Store {
         ? tabs[Math.min(index, tabs.length - 1)]?.path ?? null
         : this.state.activePath;
     this.set({ tabs, activePath: nextActive, editingBlockId: null });
-    this.editingOrdinal = null;
+    this.endEditSession();
     if (nextActive && !this.state.renders[nextActive]) this.scheduleRender(0);
   }
 
@@ -291,6 +398,7 @@ class Store {
   setSource(source: string): void {
     const tab = this.activeTab;
     if (!tab || source === tab.source) return;
+    this.sourceVersion++;
     const tabs = this.state.tabs.map((candidate) =>
       candidate.path === tab.path ? { ...candidate, source } : candidate,
     );
@@ -344,23 +452,59 @@ class Store {
     }
     const block = this.renderBlock(blockId);
     if (!block) return;
-    this.editingOrdinal = this.render?.blocks.findIndex((candidate) => candidate.id === blockId) ?? null;
+    this.editSession = { blockId, block };
     this.set({ editingBlockId: blockId, mode: 'visual' });
   }
 
   cancelEdit(): void {
-    this.editingOrdinal = null;
+    this.endEditSession();
     this.set({ editingBlockId: null });
+  }
+
+  private endEditSession(): void {
+    this.editSession = null;
+    if (this.state.editingBlockId) this.set({ editingBlockId: null });
   }
 
   /** Text of a block changed by the inline editor. */
   editBlockText(blockId: string, text: string): void {
     const tab = this.activeTab;
-    const block = this.renderBlock(blockId);
-    if (!tab || !block) return;
+    if (!tab) return;
+    const session = this.editSession && this.editSession.blockId === blockId ? this.editSession : null;
+    const block = session ? session.block : this.renderBlock(blockId);
+    if (!block) return;
     const client = getLanguageClient(this.language);
     const splice = client.spliceBlockEdit(tab.source, block, text);
     if (splice.from === splice.to && splice.insert === '') return;
+
+    // Keep the edit session's range in sync with the source we are producing.
+    if (session) {
+      const range = session.block.range;
+      const delta = splice.insert.length - (splice.to - splice.from);
+      if (splice.from >= range.from && splice.to <= range.to) {
+        session.block = {
+          ...session.block,
+          text,
+          range: { from: range.from, to: Math.max(range.from, range.to + delta) },
+        };
+      } else if (splice.from <= range.from && splice.to >= range.to) {
+        session.block = {
+          ...session.block,
+          text,
+          range: { from: splice.from, to: splice.from + splice.insert.length },
+        };
+      } else {
+        session.block = {
+          ...session.block,
+          text,
+          range: {
+            from: Math.min(range.from, splice.from),
+            to: Math.max(range.to + delta, splice.from + splice.insert.length),
+          },
+        };
+      }
+    }
+
     this.setSource(applySplice(tab.source, splice));
     if (!this.state.editingBlockId) this.set({ editingBlockId: blockId });
   }
@@ -396,7 +540,7 @@ class Store {
   // --------------------------------------------------------------- modes ---
 
   setMode(mode: ViewMode): void {
-    if (mode !== 'visual') this.editingOrdinal = null;
+    if (mode !== 'visual') this.endEditSession();
     this.set({ mode, editingBlockId: mode === 'visual' ? this.state.editingBlockId : null });
   }
 
@@ -446,6 +590,7 @@ class Store {
       return;
     }
     const seq = ++this.renderSeq;
+    const requestVersion = this.sourceVersion;
     this.set({ pending: true });
     try {
       const result = await api.render({ path, source });
@@ -456,12 +601,16 @@ class Store {
         renderError: null,
         pending: false,
       };
-      // Keep the visual editor attached to the same logical block across
-      // re-renders: block ids embed the block ordinal.
-      if (this.editingOrdinal != null) {
-        const next = result.blocks[this.editingOrdinal] ?? null;
-        patch.editingBlockId = next ? next.id : null;
-        if (!next) this.editingOrdinal = null;
+      // If no keystroke landed while this render was in flight, its block
+      // ranges are authoritative: rebase the visual edit session onto them.
+      if (this.editSession && requestVersion === this.sourceVersion) {
+        const fresh = result.blocks.find((block) => block.id === this.editSession?.blockId) ?? null;
+        if (fresh) {
+          this.editSession = {
+            blockId: fresh.id,
+            block: { ...fresh, text: this.editSession.block.text },
+          };
+        }
       }
       const cursor = this.activeTab?.cursor;
       if (cursor) {

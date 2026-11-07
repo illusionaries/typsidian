@@ -4,6 +4,7 @@ import type { LanguageClient } from '../../../shared/doc';
 import type { Extension } from '@codemirror/state';
 
 import { plainLanguageClient } from './plain';
+import { typstLanguageClient } from './typst';
 
 /**
  * Language client registry — the light (browser) half of every language plugin.
@@ -42,3 +43,10 @@ export function safeSplice(
 }
 
 export type { LanguageClient, BlockAction, Extension };
+
+// Built-in language clients. Registration is idempotent, so importing the
+// registry from several modules is safe.
+registerLanguageClient(plainLanguageClient);
+registerLanguageClient(typstLanguageClient);
+
+export { plainLanguageClient, typstLanguageClient };

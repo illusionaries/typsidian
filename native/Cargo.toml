@@ -1,0 +1,19 @@
+[package]
+name = "typsidian-native"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Small native helpers for the Typsidian Typst engine (parser-backed block splitter)."
+
+[[bin]]
+name = "typsidian-parser"
+path = "src/main.rs"
+
+[dependencies]
+typst-syntax = "0.15.1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

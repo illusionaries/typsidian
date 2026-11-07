@@ -18,7 +18,7 @@
  * point.
  */
 
-import type { BlockKind, DocBlock } from '../../../shared/doc';
+import type { BlockEditing, BlockKind, DocBlock } from '../../../shared/doc';
 import { makeBlockId } from '../../../shared/doc';
 
 interface ScannerState {
@@ -139,12 +139,73 @@ function classify(text: string): { kind: BlockKind; level?: number } | null {
   return null;
 }
 
-function blockLabel(kind: BlockKind, text: string): string {
-  const firstLine = text.split('\n', 1)[0];
+function firstLine(text: string): string {
+  return text.split('\n', 1)[0];
+}
+
+/** Short human label for a block, used by the outline and tooltips. */
+export function blockLabel(kind: BlockKind, text: string): string {
   if (kind === 'heading') {
-    return firstLine.replace(/^\s*={1,6}\s+/, '').trim().slice(0, 120) || 'Heading';
+    return firstLine(text).replace(/^\s*={1,6}\s+/, '').trim().slice(0, 120) || 'Heading';
   }
-  return firstLine.replace(/\s+/g, ' ').trim().slice(0, 120);
+  if (kind === 'code') {
+    const lines = text.split('\n');
+    const fenced = /^\s*(?:`{3,}|~{3,})/.test(lines[0] ?? '');
+    const body = fenced ? lines.slice(1).find((line) => line.trim() !== '') ?? '' : lines[0];
+    return body.replace(/\s+/g, ' ').trim().slice(0, 120) || 'Code';
+  }
+  if (kind === 'math') {
+    return text.replace(/^\s*\$\s*/, '').replace(/\s*\$\s*$/, '').replace(/\s+/g, ' ').trim().slice(0, 120);
+  }
+  if (kind === 'list') {
+    return firstLine(text)
+      .replace(/^\s*(?:[-+]|\d+[.)]|\/)\s*/, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 120);
+  }
+  return firstLine(text).replace(/\s+/g, ' ').trim().slice(0, 120);
+}
+
+/** How visual mode edits a block of the given kind. */
+export function editingFor(kind: BlockKind): BlockEditing {
+  switch (kind) {
+    case 'code':
+    case 'list':
+    case 'math':
+    case 'quote':
+    case 'table':
+    case 'figure':
+    case 'raw':
+    case 'rule':
+    case 'other':
+      return 'source';
+    default:
+      return 'inline-text';
+  }
+}
+
+/** A source span + classification, as produced by either splitter. */
+export interface BlockSpec {
+  from: number;
+  to: number;
+  kind: BlockKind;
+  level?: number;
+}
+
+/** Build a {@link DocBlock} from a trimmed source span and its classification. */
+export function makeDocBlock(source: string, spec: BlockSpec, ordinal: number): DocBlock {
+  const text = source.slice(spec.from, spec.to);
+  return {
+    id: makeBlockId(spec.kind, ordinal),
+    kind: spec.kind,
+    range: { from: spec.from, to: spec.to },
+    depth: 0,
+    level: spec.level,
+    label: blockLabel(spec.kind, text),
+    text,
+    editing: editingFor(spec.kind),
+  };
 }
 
 /**
@@ -164,20 +225,12 @@ export function splitTypstBlocks(source: string): DocBlock[] {
   /** A top-level blank line was seen since the last content line. */
   let blankSeen = true;
 
-  const close = () => {
-    if (current) {
-      raw.push(current);
-      current = null;
-    }
-  };
-  const start = (line: Line, kind: { kind: BlockKind; level?: number } | null) => {
-    current = {
-      from: line.start,
-      to: line.end,
-      kind: kind ? kind.kind : 'paragraph',
-      level: kind ? kind.level : undefined,
-    };
-  };
+  const makeBlock = (line: Line, kind: { kind: BlockKind; level?: number } | null): OpenBlock => ({
+    from: line.start,
+    to: line.end,
+    kind: kind ? kind.kind : 'paragraph',
+    level: kind ? kind.level : undefined,
+  });
 
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index];
@@ -192,28 +245,31 @@ export function splitTypstBlocks(source: string): DocBlock[] {
 
     const kind = topLevel ? classify(line.text) : null;
 
-    if (!current) {
-      start(line, kind);
-    } else if (!topLevel) {
-      // Continuation of a construct that spans lines.
-      current.to = line.end;
+    if (current === null) {
+      current = makeBlock(line, kind);
     } else {
-      // Same list across blank lines stays one block: an inserted marker
-      // between list items would split the list in two.
-      const sameList = kind?.kind === 'list' && current.kind === 'list';
-      const breakHere = !sameList && (blankSeen || (kind != null && startsNew(kind, current)));
-      if (breakHere) {
-        close();
-        start(line, kind);
+      const open: OpenBlock = current;
+      if (!topLevel) {
+        // Continuation of a construct that spans lines.
+        open.to = line.end;
       } else {
-        current.to = line.end;
+        // Same list across blank lines stays one block: an inserted marker
+        // between list items would split the list in two.
+        const sameList = kind?.kind === 'list' && open.kind === 'list';
+        const breakHere = !sameList && (blankSeen || (kind != null && startsNew(kind, open)));
+        if (breakHere) {
+          raw.push(open);
+          current = makeBlock(line, kind);
+        } else {
+          open.to = line.end;
+        }
       }
     }
 
     blankSeen = false;
     scanLine(line.text, state);
   }
-  close();
+  if (current !== null) raw.push(current);
 
   const blocks: DocBlock[] = [];
   let ordinal = 0;
@@ -222,20 +278,7 @@ export function splitTypstBlocks(source: string): DocBlock[] {
     while (from < to && /[ \t]/.test(source[from])) from++;
     while (to > from && /[ \t\n]/.test(source[to - 1])) to--;
     if (to <= from) continue;
-    const text = source.slice(from, to);
-    blocks.push({
-      id: makeBlockId(block.kind, ordinal),
-      kind: block.kind,
-      range: { from, to },
-      depth: 0,
-      level: block.level,
-      label: blockLabel(block.kind, text),
-      text,
-      editing:
-        block.kind === 'code' || block.kind === 'list' || block.kind === 'math'
-          ? 'source'
-          : 'inline-text',
-    });
+    blocks.push(makeDocBlock(source, { from, to, kind: block.kind, level: block.level }, ordinal));
     ordinal++;
   }
   return blocks;

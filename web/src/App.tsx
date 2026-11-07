@@ -12,7 +12,7 @@ import { Toasts } from './components/Toasts';
 import { Splash } from './components/Splash';
 import { EditorPane } from './editor/EditorPane';
 import { PreviewSurface } from './preview/PreviewSurface';
-import { FileTree, OutlinePanel } from './sidebar';
+import { FileTree, OutlinePanel, useVaultEvents } from './sidebar';
 
 const SPLIT_MIN = 0.22;
 const SPLIT_MAX = 0.78;
@@ -30,6 +30,11 @@ export default function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = state.theme;
   }, [state.theme]);
+
+  // Vault watcher: react to files changed outside the app (external editor, git).
+  const { connected: vaultConnected } = useVaultEvents((events) => {
+    void store.handleVaultEvents(events);
+  });
 
   const tab = state.tabs.find((candidate) => candidate.path === state.activePath) ?? null;
   const render = state.activePath ? state.renders[state.activePath] ?? null : null;
@@ -213,20 +218,27 @@ export default function App() {
               )}
             </div>
             <div className="sidebar__foot">
-              <button
-                className="icon-button"
-                title="New note"
-                style={{ width: '100%' }}
-                onClick={() => {
-                  const name = `note-${Date.now().toString(36).slice(-4)}.typ`;
-                  void store.createFile(name);
+              <div
+                title={state.workspace?.root ?? ''}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '3px 4px',
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 10,
+                  color: 'var(--fg-subtle)',
+                  overflow: 'hidden',
                 }}
               >
-                <span style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
-                  <span style={{ fontSize: 15, lineHeight: 1 }}>+</span>
-                  <span style={{ fontSize: 12 }}>New note</span>
+                <span
+                  className="statusbar__dot"
+                  style={{ background: vaultConnected ? 'var(--success)' : 'var(--fg-subtle)' }}
+                />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {state.workspace?.root ?? 'no vault'}
                 </span>
-              </button>
+              </div>
             </div>
           </aside>
 

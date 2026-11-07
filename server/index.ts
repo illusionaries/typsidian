@@ -19,7 +19,8 @@ import type {
   WorkspaceInfo,
 } from '../shared/protocol';
 import { adapterForPath } from './engine/registry';
-import { Vault } from './vault';
+import { Vault, VaultWatcher } from './vault';
+import type { SearchHit, VaultEvent } from './vault';
 
 const PORT = Number(process.env.TYPSIDIAN_PORT ?? 4747);
 const HOST = process.env.TYPSIDIAN_HOST ?? '127.0.0.1';
@@ -38,6 +39,13 @@ const app = express();
 
 app.use(express.json({ limit: '8mb' }));
 
+// The vault can change under us (external editors, git checkouts, ...): the
+// browser must never see a cached workspace listing.
+app.use('/api', (_request, response, next) => {
+  response.setHeader('Cache-Control', 'no-store');
+  next();
+});
+
 function failure(kind: ApiFailure['error']['kind'], message: string): ApiFailure {
   return { ok: false, error: { kind, message } };
 }
@@ -49,6 +57,10 @@ function sendFailure(
   message: string,
 ): void {
   response.status(status).json(failure(kind, message));
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 app.get('/api/health', (_request, response) => {
@@ -115,6 +127,20 @@ app.post('/api/file', (request, response) => {
   }
 });
 
+app.post('/api/mkdir', (request, response) => {
+  const { path: relativePath } = (request.body ?? {}) as { path?: string };
+  if (!relativePath) {
+    sendFailure(response, 400, 'bad-request', 'expected { path }');
+    return;
+  }
+  try {
+    const created = vault.mkdir(relativePath);
+    response.json({ ok: true, path: created });
+  } catch (error) {
+    sendFailure(response, 409, 'io', messageOf(error));
+  }
+});
+
 app.post('/api/rename', (request, response) => {
   const { from, to } = (request.body ?? {}) as { from?: string; to?: string };
   if (!from || !to) {
@@ -136,6 +162,85 @@ app.delete('/api/file', (request, response) => {
   } catch (error) {
     sendFailure(response, 404, 'not-found', messageOf(error));
   }
+});
+
+// ---------------------------------------------------------------------------
+// Search
+// ---------------------------------------------------------------------------
+
+app.get('/api/search', (request, response) => {
+  const query = String(request.query.q ?? '');
+  if (!query.trim()) {
+    response.json({ ok: true, query, results: [] });
+    return;
+  }
+  const requested = Number(request.query.limit ?? 50);
+  const limit = Number.isFinite(requested) ? Math.min(Math.max(Math.trunc(requested), 1), 200) : 50;
+  try {
+    const results: SearchHit[] = vault.search(query, limit);
+    response.json({ ok: true, query, results });
+  } catch (error) {
+    sendFailure(response, 500, 'internal', messageOf(error));
+  }
+});
+
+// ---------------------------------------------------------------------------
+// File watching: Server-Sent Events
+// ---------------------------------------------------------------------------
+
+const watcher = new VaultWatcher(vault.root, {
+  debounceMs: 150,
+  onError: (error) => console.warn(`[typsidian] watcher: ${messageOf(error)}`),
+});
+watcher.start();
+
+/** Responses currently streaming `/api/events`; closed on shutdown. */
+const eventClients = new Set<express.Response>();
+
+app.get('/api/events', (request, response) => {
+  response.status(200);
+  response.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  response.setHeader('Cache-Control', 'no-cache, no-transform');
+  response.setHeader('Connection', 'keep-alive');
+  response.setHeader('X-Accel-Buffering', 'no');
+  response.flushHeaders();
+
+  // Tell EventSource to reconnect quickly; a comment frames the connection.
+  response.write('retry: 2000\n\n');
+  response.write(': connected\n\n');
+
+  eventClients.add(response);
+
+  let closed = false;
+  const cleanup = (): void => {
+    if (closed) return;
+    closed = true;
+    clearInterval(heartbeat);
+    unsubscribe();
+    eventClients.delete(response);
+  };
+
+  const unsubscribe = watcher.subscribe((events: VaultEvent[]) => {
+    if (closed) return;
+    try {
+      response.write(`data: ${JSON.stringify(events)}\n\n`);
+    } catch {
+      cleanup();
+    }
+  });
+
+  // Keep proxies and idle sockets from dropping the stream.
+  const heartbeat = setInterval(() => {
+    if (closed) return;
+    try {
+      response.write(': ping\n\n');
+    } catch {
+      cleanup();
+    }
+  }, 20_000);
+
+  request.on('close', cleanup);
+  response.on('close', cleanup);
 });
 
 app.post('/api/render', async (request, response) => {
@@ -213,21 +318,34 @@ if (fs.existsSync(dist)) {
   });
 }
 
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 const server = app.listen(PORT, HOST, () => {
   console.log(`[typsidian] server  http://${HOST}:${PORT}`);
   console.log(`[typsidian] vault   ${vault.root}`);
   console.log(`[typsidian] files   ${vault.list().length}`);
+  console.log(`[typsidian] watch   ${vault.root}`);
   if (!fs.existsSync(dist)) {
     console.log('[typsidian] hint    run `npm run dev:web` and open http://localhost:5173');
   }
 });
 
+server.on('error', (error) => {
+  console.error(`[typsidian] server error: ${messageOf(error)}`);
+});
+
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
+    watcher.stop();
+    for (const client of eventClients) {
+      try {
+        client.end();
+      } catch {
+        // already gone
+      }
+    }
+    eventClients.clear();
     server.close(() => process.exit(0));
+    server.closeAllConnections?.();
+    // Never leave a zombie server behind if a socket refuses to close.
+    setTimeout(() => process.exit(0), 1000);
   });
 }

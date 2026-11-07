@@ -1,0 +1,321 @@
+/* ==========================================================================
+   Typsidian — preview surface (split / visual / preview modes).
+
+   A scrollable stack of typeset paper pages with annotation overlays and a
+   small floating HUD. Every colour comes from the shell's design tokens.
+   ========================================================================== */
+
+.ts-preview {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-inset);
+  color: var(--fg);
+  font-family: var(--font-ui);
+}
+
+/* ------------------------------------------------------------------ scroll */
+
+.ts-preview__scroller {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.ts-preview__stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 22px;
+  width: max-content;
+  min-width: 100%;
+  padding: 24px 28px 46px;
+  transition: opacity 160ms ease;
+}
+
+.ts-preview.is-pending .ts-preview__stack {
+  opacity: 0.86;
+}
+
+/* ------------------------------------------------------------------- page */
+
+.ts-page {
+  position: relative;
+  flex: 0 0 auto;
+  background: var(--bg-paper);
+  box-shadow: var(--shadow);
+  border-radius: 2px;
+}
+
+.ts-page__sheet {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: 2px;
+}
+
+/* The injected Typst SVG fills the paper; its glyphs stay real, selectable
+   text. Nothing is layered on top that could swallow pointer events. */
+.ts-page__sheet svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.ts-page__sheet text {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.ts-preview--visual .ts-page__sheet {
+  cursor: pointer;
+}
+
+/* ------------------------------------------------------------- annotations */
+
+.ts-page__annotations {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.ts-block-outline {
+  position: absolute;
+  border-radius: 4px;
+  border: 1.5px solid var(--accent);
+  pointer-events: none;
+}
+
+.ts-block-outline--active {
+  border-style: dashed;
+  border-color: var(--accent);
+  background: transparent;
+  opacity: 0.55;
+}
+
+.ts-block-outline--hover {
+  background: var(--accent-soft-2);
+  box-shadow: 0 0 0 3px var(--accent-soft-2);
+}
+
+.ts-preview--preview .ts-block-outline--hover {
+  opacity: 0.6;
+}
+
+.ts-block-outline__chip {
+  position: absolute;
+  left: -1px;
+  bottom: 100%;
+  margin-bottom: 4px;
+  max-width: min(340px, 42vw);
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-soft);
+  color: var(--accent);
+  font: 600 10.5px/1.6 var(--font-ui);
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: none;
+}
+
+/* -------------------------------------------------------------- page badge */
+
+.ts-page__badge {
+  position: absolute;
+  right: 9px;
+  bottom: 9px;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 6px;
+  display: grid;
+  place-items: center;
+  border-radius: 99px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--fg-subtle);
+  font: 500 10px/1 var(--font-mono);
+  pointer-events: none;
+  opacity: 0.7;
+  transition: opacity var(--transition);
+}
+
+.ts-page:hover .ts-page__badge {
+  opacity: 1;
+}
+
+/* --------------------------------------------------------------------- hud */
+
+.ts-preview__hud {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-soft);
+  user-select: none;
+}
+
+.ts-preview__pager {
+  padding: 0 7px;
+  color: var(--fg-subtle);
+  font: 500 10.5px/1 var(--font-mono);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.ts-preview__hud-divider {
+  width: 1px;
+  height: 15px;
+  margin: 0 3px;
+  background: var(--border);
+}
+
+.ts-preview__zoom-button,
+.ts-preview__zoom-value {
+  display: grid;
+  place-items: center;
+  height: 26px;
+  border-radius: 7px;
+  color: var(--fg-muted);
+  transition: background var(--transition), color var(--transition);
+}
+
+.ts-preview__zoom-button {
+  width: 26px;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.ts-preview__zoom-value {
+  min-width: 46px;
+  padding: 0 6px;
+  font: 500 11px/1 var(--font-ui);
+  font-variant-numeric: tabular-nums;
+}
+
+.ts-preview__zoom-button:hover,
+.ts-preview__zoom-value:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.ts-preview__zoom-button:active,
+.ts-preview__zoom-value:active {
+  background: var(--hover-strong);
+}
+
+/* ------------------------------------------------------------------- hint */
+
+.ts-preview__hint {
+  position: absolute;
+  left: 14px;
+  bottom: 14px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: 99px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-soft);
+  color: var(--fg-subtle);
+  font: 500 11px/1.4 var(--font-ui);
+  pointer-events: none;
+}
+
+.ts-preview__hint kbd {
+  font-size: 9.5px;
+}
+
+/* ------------------------------------------------------------ status layer */
+
+.ts-preview__progress {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 25;
+  height: 2px;
+  overflow: hidden;
+  background: var(--accent-soft-2);
+  pointer-events: none;
+}
+
+.ts-preview__progress::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 32%;
+  border-radius: 2px;
+  background: var(--accent);
+  animation: ts-preview-progress 1.1s ease-in-out infinite;
+}
+
+@keyframes ts-preview-progress {
+  from {
+    left: -34%;
+  }
+  to {
+    left: 100%;
+  }
+}
+
+.ts-preview__error {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: min(560px, calc(100% - 28px));
+  max-height: 104px;
+  overflow: auto;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--danger);
+  background: var(--bg-elevated-2);
+  box-shadow: var(--shadow);
+  color: var(--fg);
+  font: 11.5px/1.5 var(--font-mono);
+}
+
+.ts-preview__error-icon {
+  flex: 0 0 auto;
+  color: var(--danger);
+}
+
+.ts-preview__error-text {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+/* ---------------------------------------------------------------- empty --- */
+
+.ts-preview > .empty-state {
+  flex: 1;
+  min-height: 0;
+}
+
+.ts-preview .empty-state__hint {
+  max-width: 380px;
+}
