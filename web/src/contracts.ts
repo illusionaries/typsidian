@@ -13,7 +13,7 @@ import type {
   RenderResult,
   SourceRange,
 } from '../../shared/doc';
-import type { FileEntry, WorkspaceInfo } from '../../shared/protocol';
+import type { FileEntry, RecentVault, WorkspaceInfo } from '../../shared/protocol';
 
 export type ViewMode = 'split' | 'visual' | 'preview';
 
@@ -123,4 +123,58 @@ export interface StatusBarProps {
 
 export interface FilesSnapshot {
   files: FileEntry[];
+}
+
+// ---------------------------------------------------------------------------
+// Vault management surfaces (standalone app)
+// ---------------------------------------------------------------------------
+
+export interface WelcomeScreenProps {
+  recent: RecentVault[];
+  version: string;
+  home: string;
+  /** True inside the Electron shell, where native folder dialogs exist. */
+  desktop: boolean;
+  busy: boolean;
+  error: string | null;
+  sampleAvailable: boolean;
+  onOpenRecent(path: string): void;
+  /** Open a folder: native dialog in the desktop app, inline path input in a browser. */
+  onChooseFolder(): void;
+  onCreateVault(): void;
+  onOpenSample(): void;
+  onRemoveRecent(path: string): void;
+  /** Fallback for browser/dev: open an absolute path typed by the user. */
+  onOpenPath(path: string): void;
+}
+
+export interface VaultSwitcherProps {
+  title: string;
+  root: string | null;
+  recent: RecentVault[];
+  desktop: boolean;
+  busy: boolean;
+  onOpen(path: string): void;
+  onChoose(): void;
+  onCreate(): void;
+  onReveal(): void;
+  /** Close the vault and go back to the welcome screen. */
+  onCloseVault(): void;
+  onRemoveRecent(path: string): void;
+}
+
+/** Shape of the preload bridge exposed by the Electron shell. */
+export interface DesktopBridge {
+  readonly isDesktop: true;
+  readonly platform: string;
+  readonly appVersion: string;
+  /** Native folder picker for opening a vault; null when cancelled. */
+  chooseVaultFolder(): Promise<string | null>;
+  /** Native picker for the parent directory of a new vault; null when cancelled. */
+  chooseNewVaultParent(): Promise<string | null>;
+  /** Select a vault folder in Finder. */
+  revealVault(path: string): void;
+  openExternal(url: string): void;
+  /** Restart the app (used by the "reload" affordance on failure). */
+  reload(): void;
 }

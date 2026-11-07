@@ -42,6 +42,19 @@ async function waitForServer(timeoutMs = 45000) {
 }
 await waitForServer();
 
+/** The app boots to the welcome screen when no vault is open; open one first. */
+async function ensureVault() {
+  const app = await api('/api/app');
+  if (app.vault) return;
+  await api('/api/vault/open', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: '/Users/djdjz7/source/typsidian/sample-vault' }),
+  });
+}
+await ensureVault();
+
+
 const original = await api('/api/file?path=welcome.typ', { headers: {} });
 const originalSource = original.source;
 

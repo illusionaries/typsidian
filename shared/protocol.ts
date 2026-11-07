@@ -92,3 +92,58 @@ export const API = {
   render: '/api/render',
   pdf: '/api/export/pdf',
 } as const;
+
+/** A vault the user opened before, persisted in the app home directory. */
+export interface RecentVault {
+  /** Absolute path on disk. */
+  root: string;
+  title: string;
+  /** Epoch ms of the last time it was opened. */
+  lastOpened: number;
+  /** False when the folder no longer exists (shown greyed out in the UI). */
+  exists: boolean;
+}
+
+export interface LanguageInfo {
+  id: string;
+  displayName: string;
+  extensions: string[];
+}
+
+/**
+ * Everything the shell needs at boot to decide between the welcome screen and
+ * an open vault.
+ */
+export interface AppInfo {
+  /** Currently open vault, or null when the app is on the welcome screen. */
+  vault: WorkspaceInfo | null;
+  recent: RecentVault[];
+  /** Directory where config lives (shown in the welcome screen for debugging). */
+  home: string;
+  version: string;
+  /** Whether a bundled sample vault is available to import. */
+  sampleAvailable: boolean;
+}
+
+export interface OpenVaultRequest {
+  /** Absolute path of the vault directory. */
+  path: string;
+}
+
+export interface CreateVaultRequest {
+  /**
+   * Absolute path of the new vault directory (created if missing). When
+   * omitted the server creates `~/Documents/Typsidian` (uniquified if needed).
+   */
+  path?: string;
+}
+
+export const APP_API = {
+  app: '/api/app',
+  open: '/api/vault/open',
+  create: '/api/vault/create',
+  sample: '/api/vault/sample',
+  close: '/api/vault/close',
+  reveal: '/api/vault/reveal',
+  recentRemove: '/api/recent/remove',
+} as const;

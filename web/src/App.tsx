@@ -12,7 +12,9 @@ import { Toasts } from './components/Toasts';
 import { Splash } from './components/Splash';
 import { EditorPane } from './editor/EditorPane';
 import { PreviewSurface } from './preview/PreviewSurface';
-import { FileTree, OutlinePanel, useVaultEvents } from './sidebar';
+import { FileTree, OutlinePanel, useVaultEvents, VaultSwitcher } from './sidebar';
+import { WelcomeScreen } from './welcome';
+import { isDesktop } from './desktop';
 
 const SPLIT_MIN = 0.22;
 const SPLIT_MAX = 0.78;
@@ -52,6 +54,11 @@ export default function App() {
         event.preventDefault();
         const modes: ViewMode[] = ['split', 'visual', 'preview'];
         store.setMode(modes[Number(event.key) - 1]);
+        return;
+      }
+      if (meta && event.key.toLowerCase() === 'o') {
+        event.preventDefault();
+        void store.chooseVault();
         return;
       }
       if (meta && event.key.toLowerCase() === 's') {
@@ -154,6 +161,30 @@ export default function App() {
     />
   );
 
+  if (!state.workspace) {
+    return (
+      <div className="welcome-shell">
+        {isDesktop ? <div className="titlebar-drag" aria-hidden="true" /> : null}
+        <WelcomeScreen
+          recent={state.recent}
+          version={state.version}
+          home={state.home}
+          desktop={isDesktop}
+          busy={state.vaultBusy}
+          error={state.welcomeError}
+          sampleAvailable={state.sampleAvailable}
+          onOpenRecent={(path) => void store.openVault(path)}
+          onChooseFolder={() => void store.chooseVault()}
+          onCreateVault={() => void store.createVault()}
+          onOpenSample={() => void store.openSampleVault()}
+          onRemoveRecent={(path) => void store.removeRecent(path)}
+          onOpenPath={(path) => void store.openVault(path)}
+        />
+        <Toasts toasts={state.toasts} onDismiss={(id) => store.dismissToast(id)} />
+      </div>
+    );
+  }
+
   return (
     <div className={`app${store.isDragging ? ' app--dragging' : ''}`}>
       <Toolbar
@@ -176,6 +207,19 @@ export default function App() {
       <div className="app__body">
         <div className="workspace">
           <aside className={`sidebar${state.sidebarOpen ? '' : ' sidebar--collapsed'}`}>
+            <VaultSwitcher
+              title={state.workspace?.title ?? 'No vault'}
+              root={state.workspace?.root ?? null}
+              recent={state.recent}
+              desktop={isDesktop}
+              busy={state.vaultBusy}
+              onOpen={(path) => void store.openVault(path)}
+              onChoose={() => void store.chooseVault()}
+              onCreate={() => void store.createVault()}
+              onReveal={() => store.revealVault()}
+              onCloseVault={() => void store.closeVault()}
+              onRemoveRecent={(path) => void store.removeRecent(path)}
+            />
             <div className="sidebar-tabs" role="tablist">
               <button
                 className="sidebar-tab"
@@ -252,10 +296,7 @@ export default function App() {
               activePath={state.activePath}
               onSelect={(path) => void store.openFile(path)}
               onClose={(path) => store.closeTab(path)}
-              onNew={() => {
-                const name = `note-${Date.now().toString(36).slice(-4)}.typ`;
-                void store.createFile(name);
-              }}
+              onNew={() => void store.createFile(`note-${Date.now().toString(36).slice(-4)}.typ`)}
             />
 
             <div className="panes" ref={bodyRef}>

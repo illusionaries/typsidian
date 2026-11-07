@@ -1,6 +1,7 @@
 # Typsidian
 
-An Obsidian-like editor for **Typst**. Three ways to work with one document:
+A standalone macOS app — and an Obsidian-like editor for **Typst**. Three ways
+to work with one document:
 
 ![Split mode: source on the left, typeset pages on the right](docs/screenshots/split-dark.png)
 
@@ -15,25 +16,47 @@ An Obsidian-like editor for **Typst**. Three ways to work with one document:
 Everything is real Typst, compiled by Typst itself, using your machine's real
 fonts. A vault is just a folder of `.typ` files.
 
-## Quick start
+## Install & run
 
 ```bash
-npm install
-npm run build:native   # optional but recommended: parser helper ("npm run dev" works without it)
-npm run dev            # server (127.0.0.1:4747) + web (localhost:5173)
+bun install
+bun run build:native         # once: Rust typst-syntax parser (the app works without it)
+bun run desktop:run          # build + launch the desktop app (Electron)
+```
+
+Build a double-clickable app bundle:
+
+```bash
+bun run desktop:package      # -> dist-app/mac-arm64/Typsidian.app
+bun run desktop:dmg          # -> dist-app/Typsidian-<version>.dmg
+```
+
+Browser development (fast HMR, same UI):
+
+```bash
+bun run dev                  # server on 127.0.0.1:4747 + vite on localhost:5173
 open http://localhost:5173
 ```
 
-The default vault is [`sample-vault/`](sample-vault) (edit it freely — it is in
-the repo). Point it at another folder:
+Requirements: macOS (arm64), [Bun](https://bun.sh) 1.2+, and a `typst` binary on
+`PATH` (used only for ranged compile diagnostics; the editor works without it).
+The native Typst compiler ships prebuilt for `darwin-arm64`.
 
-```bash
-TYPSIDIAN_VAULT="$HOME/Documents/notes" npm run dev
-```
+### Vaults
 
-Requirements: macOS, Node 22+, and a `typst` binary on `PATH` (used only for
-ranged compile diagnostics; the editor works without it). Native dependencies
-are prebuilt for `darwin-arm64` by `@myriaddreamin/typst-ts-node-compiler`.
+A vault is just a folder of `.typ` files — nothing is imported or converted. On
+launch Typsidian shows a welcome screen with your recent vaults:
+
+- **Open folder…** — pick any existing folder (native macOS dialog).
+- **New vault…** — create an empty vault (or `~/Documents/Typsidian` in the
+  browser build) and start writing.
+- **Try the sample vault** — copies the bundled demo vault to
+  `~/Documents/Typsidian Sample`.
+
+Recent vaults are stored in `~/Library/Application Support/Typsidian/` (the
+desktop app) or `~/.typsidian/` (dev server). Switch vaults any time from the
+vault menu at the top of the sidebar; **Close vault** returns to the welcome
+screen.
 
 ## Features
 
@@ -141,6 +164,7 @@ source hash.
 ## Architecture
 
 ```
+electron/          desktop shell: window, native menu, folder dialogs, packaging
 shared/            universal document model + client/server protocol (no deps)
 server/            express API, vault IO, language registry
   engine/typst/    Typst DocumentAdapter (native compiler, SVG splitting, geometry)
@@ -167,15 +191,22 @@ stale render.
 ## Development
 
 ```bash
-npm run dev            # server + vite
-npm run typecheck      # tsc --noEmit
-npm run build:web      # production bundle → dist/
-npm run build:native   # optional Rust parser helper → native/target/release/
-npm start              # production: serves dist/ from the API server
-node scripts/verify-ui.mjs       # headless Chrome interaction suite (24 checks)
-node scripts/verify-errors.mjs   # diagnostics, heading edits, paging
-npx tsx scripts/test-engine.mts  # engine invariants (blocks, layout neutrality)
+bun run dev            # server + vite (browser mode)
+bun run typecheck      # tsc --noEmit
+bun run build:web      # production bundle → dist/
+bun run build:server   # server bundle for Electron → dist-server/
+bun run build:native   # optional Rust parser helper → native/target/release/
+bun run start          # production server: serves dist/ + the API
+
+bun scripts/test-engine.mts      # engine invariants (blocks, layout neutrality)
+bun scripts/test-vaults.mts      # vault open/create/close, recents, watcher swap
+bun scripts/verify-ui.mjs        # headless Chrome interaction suite
+bun scripts/verify-errors.mjs    # diagnostics, heading edits, paging
 ```
+
+Runtime and package manager: **Bun**. Electron runs the UI with the same server
+as a child process (`ELECTRON_RUN_AS_NODE`), so there is exactly one
+implementation of the engine.
 
 The verification scripts drive real Chrome via `puppeteer-core` and leave
 screenshots in `/tmp/typsidian-shots`.

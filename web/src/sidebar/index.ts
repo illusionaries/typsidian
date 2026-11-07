@@ -6,6 +6,7 @@
  */
 
 export { FileTree } from './FileTree';
+export { VaultSwitcher } from './VaultSwitcher';
 export { OutlinePanel } from './OutlinePanel';
 export { useVaultEvents } from './useVaultEvents';
 export type {

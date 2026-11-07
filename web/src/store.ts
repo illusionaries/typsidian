@@ -18,8 +18,9 @@ import {
   type RenderResult,
   type SourceRange,
 } from '../../shared/doc';
-import type { FileEntry, WorkspaceInfo } from '../../shared/protocol';
-import { api, ApiError } from './api';
+import type { FileEntry, RecentVault, WorkspaceInfo } from '../../shared/protocol';
+import { api, vaultApi, ApiError } from './api';
+import { applyDesktopChrome, desktop, isDesktop } from './desktop';
 import type { RevealRequest, ViewMode } from './contracts';
 import { getLanguageClient } from './languages';
 
@@ -45,6 +46,16 @@ export interface AppState {
   sidebarOpen: boolean;
   sidebarTab: 'files' | 'outline';
   workspace: WorkspaceInfo | null;
+  /** Recent vaults, from the app config (welcome screen + sidebar switcher). */
+  recent: RecentVault[];
+  /** App data directory (shown in the welcome screen footer). */
+  home: string;
+  version: string;
+  sampleAvailable: boolean;
+  /** A vault open/create operation is in flight. */
+  vaultBusy: boolean;
+  /** Error shown on the welcome screen. */
+  welcomeError: string | null;
   tabs: OpenTab[];
   activePath: string | null;
   renders: Record<string, RenderResult | null>;
@@ -112,6 +123,12 @@ class Store {
     sidebarOpen: true,
     sidebarTab: 'files',
     workspace: null,
+    recent: [],
+    home: '',
+    version: '',
+    sampleAvailable: false,
+    vaultBusy: false,
+    welcomeError: null,
     tabs: [],
     activePath: null,
     renders: {},
@@ -211,25 +228,194 @@ class Store {
   }
 
   private async doInit(): Promise<void> {
+    applyDesktopChrome();
+    this.registerMenuApi();
     try {
-      const workspace = await api.workspace();
-      const preferred =
-        workspace.files.find((file) => file.path === 'welcome.typ') ??
-        workspace.files.find((file) => file.language === 'typst') ??
-        workspace.files[0] ??
-        null;
-      this.set({ workspace, ready: true });
-      if (preferred) await this.openFile(preferred.path);
-      else this.set({ mode: 'preview' });
+      const info = await vaultApi.app();
+      this.applyAppInfo(info);
+      this.set({ ready: true });
+      if (info.vault) {
+        await this.enterVault(info.vault);
+      } else {
+        this.set({ mode: 'preview' });
+      }
     } catch (error) {
       this.set({
         ready: true,
         fatalError:
           error instanceof Error
-            ? `${error.message}\n\nIs the local server running? Start it with: npm run dev`
+            ? `${error.message}\n\nIs the local server running? Start it with: bun run dev`
             : String(error),
       });
     }
+  }
+
+  /** Commands invoked by the native application menu. */
+  private registerMenuApi(): void {
+    if (typeof window === 'undefined') return;
+    window.__typsidianMenu = {
+      openVault: (path: string) => void this.openVault(path),
+      newVault: () => void this.createVault(),
+      closeVault: () => void this.closeVault(),
+      exportPdf: () => void this.exportPdf(),
+      newNote: () => void this.createFile(this.uniqueNoteName()),
+      toggleSidebar: () => this.toggleSidebar(),
+    };
+  }
+
+  private uniqueNoteName(): string {
+    return `note-${Date.now().toString(36).slice(-4)}.typ`;
+  }
+
+  private applyAppInfo(info: { recent: RecentVault[]; home: string; version: string; sampleAvailable: boolean }): void {
+    this.set({
+      recent: info.recent,
+      home: info.home,
+      version: info.version,
+      sampleAvailable: info.sampleAvailable,
+    });
+  }
+
+  /** Switch the app to an open vault: reset tabs and load a document. */
+  private async enterVault(workspace: WorkspaceInfo): Promise<void> {
+    this.set({
+      workspace,
+      mode: 'split',
+      welcomeError: null,
+      tabs: [],
+      activePath: null,
+      renders: {},
+      editingBlockId: null,
+      revealBlockId: null,
+      activeBlockId: null,
+      reveal: null,
+      renderError: null,
+    });
+    this.endEditSession();
+    const preferred =
+      workspace.files.find((file) => file.path === 'welcome.typ') ??
+      workspace.files.find((file) => file.language === 'typst') ??
+      workspace.files[0] ??
+      null;
+    if (preferred) {
+      await this.openFile(preferred.path);
+      document.title = 'Typsidian';
+    } else {
+      document.title = `${workspace.title} — Typsidian`;
+    }
+  }
+
+  // -------------------------------------------------------------- vaults ---
+
+  get desktopAvailable(): boolean {
+    return isDesktop;
+  }
+
+  async refreshAppInfo(): Promise<void> {
+    try {
+      const info = await vaultApi.app();
+      this.applyAppInfo(info);
+    } catch {
+      /* ignore: the shell keeps working with what it has */
+    }
+  }
+
+  async openVault(path: string): Promise<void> {
+    this.set({ vaultBusy: true, welcomeError: null });
+    try {
+      const info = await vaultApi.open(path);
+      this.applyAppInfo(info);
+      if (info.vault) await this.enterVault(info.vault);
+      this.set({ vaultBusy: false });
+      if (info.vault) this.toast(`Opened ${info.vault.title}`, 'success');
+    } catch (error) {
+      this.set({ vaultBusy: false, welcomeError: messageOf(error) });
+    }
+  }
+
+  /** Native folder dialog (desktop) or nothing (browser uses a typed path). */
+  async chooseVault(): Promise<void> {
+    if (!desktop) return;
+    const path = await desktop.chooseVaultFolder();
+    if (path) await this.openVault(path);
+  }
+
+  async createVault(): Promise<void> {
+    this.set({ vaultBusy: true, welcomeError: null });
+    try {
+      let path: string | undefined;
+      if (desktop) {
+        const parent = await desktop.chooseNewVaultParent();
+        if (!parent) {
+          this.set({ vaultBusy: false });
+          return;
+        }
+        path = `${parent}/Typsidian Vault`.replace(/\/+/g, '/');
+      }
+      const info = await vaultApi.create(path);
+      this.applyAppInfo(info);
+      if (info.vault) await this.enterVault(info.vault);
+      this.set({ vaultBusy: false });
+      if (info.vault) this.toast(`Created ${info.vault.title}`, 'success');
+    } catch (error) {
+      this.set({ vaultBusy: false, welcomeError: messageOf(error) });
+    }
+  }
+
+  async openSampleVault(): Promise<void> {
+    this.set({ vaultBusy: true, welcomeError: null });
+    try {
+      const info = await vaultApi.sample();
+      this.applyAppInfo(info);
+      if (info.vault) await this.enterVault(info.vault);
+      this.set({ vaultBusy: false });
+      if (info.vault) this.toast(`Opened ${info.vault.title}`, 'success');
+    } catch (error) {
+      this.set({ vaultBusy: false, welcomeError: messageOf(error) });
+    }
+  }
+
+  async closeVault(): Promise<void> {
+    this.set({ vaultBusy: true });
+    try {
+      const info = await vaultApi.close();
+      this.applyAppInfo(info);
+      this.set({
+        workspace: null,
+        tabs: [],
+        activePath: null,
+        renders: {},
+        activeBlockId: null,
+        revealBlockId: null,
+        editingBlockId: null,
+        reveal: null,
+        renderError: null,
+        vaultBusy: false,
+        mode: 'preview',
+      });
+      this.endEditSession();
+      document.title = 'Typsidian';
+    } catch (error) {
+      this.set({ vaultBusy: false, welcomeError: messageOf(error) });
+    }
+  }
+
+  async removeRecent(path: string): Promise<void> {
+    try {
+      const info = await vaultApi.removeRecent(path);
+      this.applyAppInfo(info);
+    } catch (error) {
+      this.toast(messageOf(error), 'error');
+    }
+  }
+
+  revealVault(): void {
+    const root = this.state.workspace?.root;
+    if (root && desktop) desktop.revealVault(root);
+  }
+
+  get vaultTitle(): string {
+    return this.state.workspace?.title ?? 'No vault';
   }
 
   async refreshWorkspace(): Promise<WorkspaceInfo | null> {

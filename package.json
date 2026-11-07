@@ -1,19 +1,25 @@
 {
   "name": "typsidian",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "An Obsidian-like editor for Typst with a universal, language-agnostic document core.",
   "scripts": {
-    "dev": "concurrently -k -n server,web -c blue,green \"npm run dev:server\" \"npm run dev:web\"",
-    "dev:server": "tsx watch server/index.ts",
+    "dev": "concurrently -k -n server,web -c blue,green \"bun run dev:server\" \"bun run dev:web\"",
+    "dev:server": "bun --watch server/index.ts",
     "dev:web": "vite",
     "build:web": "vite build",
+    "build:server": "bun scripts/build-server.mjs",
+    "build:icon": "bun scripts/build-icon.mjs",
     "build:native": "cargo build --release --manifest-path native/Cargo.toml",
+    "desktop:build": "bun run build:native && bun run build:server && bun run build:web && bun run build:icon",
+    "desktop:run": "bun run desktop:build && electron electron/main.cjs",
+    "desktop:package": "bun run desktop:build && electron-builder --mac --arm64 --dir",
+    "desktop:dmg": "bun run desktop:build && electron-builder --mac --arm64",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test:engine": "tsx scripts/test-engine.mts",
-    "test:ui": "node scripts/verify-ui.mjs && node scripts/verify-errors.mjs",
-    "start": "NODE_ENV=production tsx server/index.ts"
+    "test:engine": "bun scripts/test-engine.mts",
+    "test:ui": "bun scripts/verify-ui.mjs && bun scripts/verify-errors.mjs",
+    "start": "NODE_ENV=production bun server/index.ts"
   },
   "dependencies": {
     "@myriaddreamin/typst-ts-node-compiler": "^0.7.0",
@@ -36,11 +42,56 @@
     "@vitejs/plugin-react": "^4.4.1",
     "codemirror-lang-typst": "^0.6.0",
     "concurrently": "^9.1.2",
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8",
     "puppeteer-core": "^23.11.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
-    "tsx": "^4.19.3",
     "typescript": "^5.8.3",
     "vite": "^6.3.3"
+  },
+  "main": "electron/main.cjs",
+  "trustedDependencies": [
+    "electron",
+    "esbuild",
+    "fsevents"
+  ],
+  "build": {
+    "appId": "dev.typsidian.app",
+    "productName": "Typsidian",
+    "directories": {
+      "output": "dist-app",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**",
+      "dist-server/**",
+      "electron/**",
+      "package.json",
+      "!**/*.map"
+    ],
+    "extraResources": [
+      {
+        "from": "sample-vault",
+        "to": "sample-vault"
+      }
+    ],
+    "asarUnpack": [
+      "**/*.node",
+      "**/@myriaddreamin/**"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "build/icon.png",
+      "darkModeSupport": true,
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ]
+    }
   }
 }

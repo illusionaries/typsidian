@@ -13,7 +13,8 @@ import type {
   SavedFile,
   WorkspaceInfo,
 } from '../../shared/protocol';
-import { API } from '../../shared/protocol';
+import { API, APP_API } from '../../shared/protocol';
+import type { AppInfo } from '../../shared/protocol';
 
 export class ApiError extends Error {
   readonly kind: ApiFailure['error']['kind'];
@@ -113,5 +114,45 @@ export const api = {
       throw new ApiError('render', message);
     }
     return response.blob();
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Vault management (standalone app)
+// ---------------------------------------------------------------------------
+
+
+export const vaultApi = {
+  app(): Promise<AppInfo> {
+    return request<AppInfo>(APP_API.app);
+  },
+
+  open(path: string): Promise<AppInfo> {
+    return request<AppInfo>(APP_API.open, {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    });
+  },
+
+  create(path?: string): Promise<AppInfo> {
+    return request<AppInfo>(APP_API.create, {
+      method: 'POST',
+      body: JSON.stringify(path ? { path } : {}),
+    });
+  },
+
+  sample(): Promise<AppInfo> {
+    return request<AppInfo>(APP_API.sample, { method: 'POST', body: '{}' });
+  },
+
+  close(): Promise<AppInfo> {
+    return request<AppInfo>(APP_API.close, { method: 'POST', body: '{}' });
+  },
+
+  removeRecent(path: string): Promise<AppInfo> {
+    return request<AppInfo>(APP_API.recentRemove, {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    });
   },
 };

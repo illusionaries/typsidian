@@ -11,9 +11,16 @@
  */
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
-import type { FileContent, FileEntry, SavedFile, WorkspaceInfo } from '../shared/protocol';
+import type {
+  FileContent,
+  FileEntry,
+  RecentVault,
+  SavedFile,
+  WorkspaceInfo,
+} from '../shared/protocol';
 import { allAdapters, languageOf } from './engine/registry';
 
 /** Directories never walked, listed or watched. */
@@ -608,4 +615,323 @@ export class VaultWatcher {
       // A broken logger must not break the watcher.
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Application home: config file + recent vaults + vault bootstrap helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * A vault reference as persisted on disk (a plain `RecentVault` without the
+ * live `exists` flag).
+ */
+export interface StoredVaultRef {
+  /** Canonical absolute path. */
+  root: string;
+  /** Folder name, shown in the switcher. */
+  title: string;
+  /** Epoch ms of the last time it was opened. */
+  lastOpened: number;
+}
+
+/** Shape of `<home>/config.json`. Unknown keys are preserved on write. */
+export interface AppConfig {
+  recentVaults: StoredVaultRef[];
+  lastVault: string | null;
+  [key: string]: unknown;
+}
+
+/** How many recent vaults we keep around. */
+export const MAX_RECENT_VAULTS = 12;
+
+/** Resolve the app home directory (`TYPSIDIAN_HOME` or `~/.typsidian`). */
+export function resolveAppHome(explicit?: string): string {
+  const fromEnv = explicit ?? process.env.TYPSIDIAN_HOME;
+  if (fromEnv && fromEnv.trim()) return path.resolve(fromEnv.trim());
+  return path.join(os.homedir(), '.typsidian');
+}
+
+/** Canonical absolute path, resolving symlinks when the path exists. */
+export function canonicalPath(target: string): string {
+  const absolute = path.resolve(target);
+  try {
+    return fs.realpathSync(absolute);
+  } catch {
+    return absolute;
+  }
+}
+
+/** True when `target` exists and is a directory. Never throws. */
+export function isDirectory(target: string): boolean {
+  try {
+    return fs.statSync(target).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function emptyConfig(): AppConfig {
+  return { recentVaults: [], lastVault: null };
+}
+
+function normaliseStoredRef(value: unknown): StoredVaultRef | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.root !== 'string' || record.root.trim() === '') return null;
+  const root = path.resolve(record.root);
+  const title =
+    typeof record.title === 'string' && record.title.trim() !== ''
+      ? record.title
+      : path.basename(root) || root;
+  const lastOpened =
+    typeof record.lastOpened === 'number' && Number.isFinite(record.lastOpened)
+      ? record.lastOpened
+      : 0;
+  return { root, title, lastOpened };
+}
+
+/**
+ * The app home directory and its `config.json`.
+ *
+ * Reads are tolerant: a missing, truncated or hand-edited config degrades to an
+ * empty config instead of failing the request. Writes are atomic
+ * (temporary file + rename) so a crash can never leave a half-written file.
+ * Nothing here throws at startup, even when the home is read-only.
+ */
+export class AppHome {
+  readonly dir: string;
+  readonly configFile: string;
+  private readonly warned = new Set<string>();
+
+  constructor(dir?: string) {
+    this.dir = path.resolve(dir ?? resolveAppHome());
+    this.configFile = path.join(this.dir, 'config.json');
+    try {
+      fs.mkdirSync(this.dir, { recursive: true });
+    } catch (error) {
+      this.warn(`cannot create app home ${this.dir}: ${messageOf(error)}`);
+    }
+  }
+
+  /** Read the config, degrading to an empty config on any problem. */
+  read(): AppConfig {
+    let raw: string;
+    try {
+      raw = fs.readFileSync(this.configFile, 'utf8');
+    } catch {
+      return emptyConfig();
+    }
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return emptyConfig();
+      }
+      const record = parsed as Record<string, unknown>;
+      const recentVaults: StoredVaultRef[] = [];
+      const seen = new Set<string>();
+      if (Array.isArray(record.recentVaults)) {
+        for (const entry of record.recentVaults) {
+          const ref = normaliseStoredRef(entry);
+          if (!ref) continue;
+          if (seen.has(ref.root)) continue;
+          seen.add(ref.root);
+          recentVaults.push(ref);
+          if (recentVaults.length >= MAX_RECENT_VAULTS) break;
+        }
+      }
+      const lastVault =
+        typeof record.lastVault === 'string' && record.lastVault.trim() !== ''
+          ? path.resolve(record.lastVault)
+          : null;
+      return { ...record, recentVaults, lastVault };
+    } catch {
+      // Malformed JSON: keep the file for the user to inspect, start clean.
+      this.warn(`config.json is malformed, ignoring it: ${this.configFile}`);
+      return emptyConfig();
+    }
+  }
+
+  /** Persist the config atomically. Returns false when the home is read-only. */
+  write(config: AppConfig): boolean {
+    const tmp = `${this.configFile}.${process.pid}.${Date.now().toString(36)}.tmp`;
+    try {
+      fs.mkdirSync(this.dir, { recursive: true });
+      fs.writeFileSync(
+        tmp,
+        `${JSON.stringify({ ...config, recentVaults: config.recentVaults.slice(0, MAX_RECENT_VAULTS) }, null, 2)}\n`,
+        'utf8',
+      );
+      fs.renameSync(tmp, this.configFile);
+      return true;
+    } catch (error) {
+      this.warn(`cannot write ${this.configFile}: ${messageOf(error)}`);
+      try {
+        fs.rmSync(tmp, { force: true });
+      } catch {
+        // ignore
+      }
+      return false;
+    }
+  }
+
+  /** Stored recent vaults, newest first. */
+  recentEntries(): StoredVaultRef[] {
+    return this.read().recentVaults;
+  }
+
+  /** Recent vaults with their live `exists` flag, ready for the UI. */
+  recentVaults(): RecentVault[] {
+    return this.read().recentVaults.map((entry) => ({
+      root: entry.root,
+      title: entry.title,
+      lastOpened: entry.lastOpened,
+      exists: isDirectory(entry.root),
+    }));
+  }
+
+  /** Remember an opened vault: de-duped, newest first, capped. */
+  remember(root: string, title?: string): AppConfig {
+    const canonical = canonicalPath(root);
+    const config = this.read();
+    const name = title?.trim() || path.basename(canonical) || canonical;
+    config.recentVaults = [
+      { root: canonical, title: name, lastOpened: Date.now() },
+      ...config.recentVaults.filter((entry) => canonicalPath(entry.root) !== canonical),
+    ].slice(0, MAX_RECENT_VAULTS);
+    this.write(config);
+    return config;
+  }
+
+  /** Record the vault that was opened last (persisted across restarts). */
+  setLastVault(root: string | null): AppConfig {
+    const config = this.read();
+    config.lastVault = root ? canonicalPath(root) : null;
+    this.write(config);
+    return config;
+  }
+
+  /** Convenience: remember `root` and mark it as the last opened vault. */
+  record(root: string, title?: string): void {
+    this.remember(root, title);
+    this.setLastVault(root);
+  }
+
+  /** Forget one vault (either from the recent list or as last vault). */
+  removeRecent(root: string): AppConfig {
+    const canonical = canonicalPath(root);
+    const config = this.read();
+    config.recentVaults = config.recentVaults.filter(
+      (entry) => canonicalPath(entry.root) !== canonical,
+    );
+    if (config.lastVault && canonicalPath(config.lastVault) === canonical) {
+      config.lastVault = null;
+    }
+    this.write(config);
+    return config;
+  }
+
+  private warn(message: string): void {
+    if (this.warned.has(message)) return;
+    this.warned.add(message);
+    console.warn(`[typsidian] ${message}`);
+  }
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** Expand a leading `~` in a user supplied path. */
+export function expandHome(target: string): string {
+  const trimmed = target.trim();
+  if (trimmed === '~') return os.homedir();
+  if (trimmed.startsWith('~/')) return path.join(os.homedir(), trimmed.slice(2));
+  return trimmed;
+}
+
+/** `mkdir -p` (including parents) and return the canonical directory path. */
+export function ensureDirectory(target: string): string {
+  const absolute = path.resolve(expandHome(target));
+  fs.mkdirSync(absolute, { recursive: true });
+  if (!isDirectory(absolute)) {
+    throw new Error(`not a directory: ${absolute}`);
+  }
+  return canonicalPath(absolute);
+}
+
+/** Short starter document for a brand new vault. */
+export function seedDocument(title: string): string {
+  const heading = title.replace(/[-_]+/g, ' ').replace(/\b\w/g, (character) => character.toUpperCase());
+  return `#set page(paper: "a4", margin: 2.5cm)
+#set text(size: 11pt)
+
+= ${heading || 'Welcome'}
+
+This vault is a plain folder of \`.typ\` files — add notes from the sidebar, or
+edit this file.
+
+- \`⌥1\` Split mode: source and typeset pages side by side
+- \`⌥2\` Visual mode: click a block and edit it in place
+- \`⌥3\` Preview mode: read the finished document
+
+#quote(block: true)[
+  Type \`⌘S\` to save, \`⌘⇧E\` to export a PDF.
+]
+`;
+}
+
+/**
+ * Seed `welcome.typ` when the vault has no editable documents yet.
+ * Returns true when a file was written.
+ */
+export function seedEmptyVault(root: string): boolean {
+  const vault = new Vault(root);
+  if (vault.list().length > 0) return false;
+  const title = path.basename(vault.root) || 'Welcome';
+  fs.writeFileSync(path.join(vault.root, 'welcome.typ'), seedDocument(title), 'utf8');
+  return true;
+}
+
+/** `base`, then `base 2`, `base 3`, ... — the first path that does not exist. */
+export function uniqueDirectory(base: string): string {
+  const absolute = path.resolve(expandHome(base));
+  if (!fs.existsSync(absolute)) return absolute;
+  for (let index = 2; index < 1000; index++) {
+    const candidate = `${absolute} ${index}`;
+    if (!fs.existsSync(candidate)) return candidate;
+  }
+  return `${absolute} ${Date.now().toString(36)}`;
+}
+
+/**
+ * Create a vault directory (parents included) and seed it when empty.
+ * Returns the canonical root of the new vault.
+ */
+export function createVaultDirectory(target: string): string {
+  const root = ensureDirectory(target);
+  seedEmptyVault(root);
+  return root;
+}
+
+/** Recursively copy the bundled sample vault, skipping OS/editor junk. */
+export function copySampleVault(source: string, destination: string): string {
+  const root = ensureDirectory(source);
+  const target = ensureDirectory(destination);
+  fs.cpSync(root, target, {
+    recursive: true,
+    force: true,
+    errorOnExist: false,
+    filter: (entry) => {
+      const name = path.basename(entry);
+      if (IGNORED_DIRECTORIES.has(name)) return false;
+      if (name === '.DS_Store' || name.startsWith('.') && name !== '.') {
+        // Skip hidden OS files, but never skip the destination itself: the
+        // filter only ever sees entries inside `root`.
+        return false;
+      }
+      if (IGNORED_FILE_SUFFIXES.some((suffix) => name.endsWith(suffix))) return false;
+      return true;
+    },
+  });
+  return target;
 }
