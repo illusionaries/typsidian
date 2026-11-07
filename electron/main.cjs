@@ -30,7 +30,7 @@ const http = require('node:http');
 const net = require('node:net');
 const path = require('node:path');
 
-const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, shell } = require('electron');
 
 const APP_NAME = 'Typsidian';
 const HOST = '127.0.0.1';
@@ -117,6 +117,13 @@ function boot() {
       mainWindow.focus();
     }
   });
+
+  // Native chrome follows the *app* theme, not the system theme. macOS draws the
+  // traffic lights for the window's effective appearance: a dark app window in
+  // light system mode otherwise gets the dim light-mode buttons, which don't
+  // match the dark background (same issue as VS Code). The renderer keeps this
+  // in sync through the preload bridge ('theme:sync'); dark is the app default.
+  nativeTheme.themeSource = 'dark';
 
   app.whenReady().then(onReady).catch(failFatal);
 
@@ -743,6 +750,15 @@ function registerIpc() {
     } catch (error) {
       console.error(`[typsidian] openExternal failed: ${error.message ?? error}`);
       return false;
+    }
+  });
+
+  // The renderer owns the app theme; keep the native appearance in step so the
+  // window chrome (traffic lights, native menus, dialogs) matches it.
+  ipcMain.on('theme:sync', (_event, theme) => {
+    if (theme !== 'light' && theme !== 'dark') return;
+    if (nativeTheme.themeSource !== theme) {
+      nativeTheme.themeSource = theme;
     }
   });
 

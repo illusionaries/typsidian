@@ -27,6 +27,53 @@ function appVersion() {
 
 const platform = process.platform;
 
+// ---------------------------------------------------------------------------
+// Native appearance sync
+//
+// The shell sets `nativeTheme.themeSource` from the renderer's theme so the
+// macOS traffic lights and native controls match the app's background instead
+// of the system appearance. The theme is persisted by the store under
+// `typsidian.ui` and reflected on `documentElement[data-theme]`.
+// ---------------------------------------------------------------------------
+
+const THEME_STORAGE_KEY = 'typsidian.ui';
+
+function readStoredTheme() {
+  try {
+    const raw = window.localStorage.getItem(THEME_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    const theme = parsed && typeof parsed === 'object' ? parsed.theme : null;
+    return theme === 'light' || theme === 'dark' ? theme : null;
+  } catch {
+    return null;
+  }
+}
+
+function sendTheme(theme) {
+  if (theme !== 'light' && theme !== 'dark') return;
+  try {
+    ipcRenderer.send('theme:sync', theme);
+  } catch {
+    /* the shell is going away; nothing to do */
+  }
+}
+
+/** Push the current theme and keep watching for renderer-side changes. */
+function syncTheme() {
+  sendTheme(readStoredTheme() ?? document.documentElement.dataset.theme);
+  try {
+    new MutationObserver(() => {
+      sendTheme(document.documentElement.dataset.theme);
+    }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  } catch {
+    /* documentElement not ready; the poll below covers it */
+  }
+}
+
+// Report early (before React boots) so the first painted window chrome matches.
+sendTheme(readStoredTheme());
+
 /** @type {import('../web/src/contracts').DesktopBridge} */
 const bridge = {
   isDesktop: true,
@@ -59,3 +106,9 @@ const bridge = {
 };
 
 contextBridge.exposeInMainWorld('typsidian', bridge);
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', syncTheme, { once: true });
+} else {
+  syncTheme();
+}
